@@ -1,10 +1,41 @@
-use std::{io::Read, time::Instant};
+use std::{io::{Read, Seek}, time::Instant};
 
 #[derive(Debug)]
-struct LineData {
+struct LineIndex {
     line_start: usize,
     line_length: usize,
     line_display_length: usize,
+}
+
+#[derive(Debug)]
+struct FileIndex {
+    lines: Vec<LineIndex>,
+}
+
+impl FileIndex {
+    pub fn read_window(self, file: &std::fs::File, window: &FileWindow) -> String {
+        let mut s = String::new();
+
+        for l in window.first_line..window.first_line + window.lines {
+            let line_data = &self.lines[l];
+            // TODO: check that l is in range
+            if window.first_column >= line_data.line_display_length {
+                continue;
+            }
+
+            file.seek(pos)
+        }
+
+        return s;
+    }
+}
+
+#[derive(Debug)]
+struct FileWindow {
+    first_line: usize,
+    first_column: usize,
+    lines: usize,
+    columns: usize,
 }
 
 // fn index_lines_chars(s: &str) -> Vec<LineData> {
@@ -21,7 +52,7 @@ struct LineData {
 //     lines_data
 // }
 
-fn index_lines_bytes(s: &str) -> Vec<LineData> {
+fn index_lines_bytes(s: &str) -> Vec<LineIndex> {
     let mut lines_data = vec![];
 
     let mut line_start = 0;
@@ -43,7 +74,7 @@ fn index_lines_bytes(s: &str) -> Vec<LineData> {
         } else if c == 10 {
             /* NL (\n) */
             if cr {
-                lines_data.push(LineData {
+                lines_data.push(LineIndex {
                     line_start,
                     line_length,
                     line_display_length,
@@ -71,7 +102,7 @@ fn index_lines_bytes(s: &str) -> Vec<LineData> {
 //     indices
 // }
 
-fn read_and_index_bytes(filename: &str) -> Vec<LineData> {
+fn read_and_index_bytes(filename: &str) -> Vec<LineIndex> {
     let start = Instant::now();
     let contents = std::fs::read_to_string(filename).unwrap();
     println!("Read file in {}ms", start.elapsed().as_millis());
