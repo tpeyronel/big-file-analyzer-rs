@@ -1,11 +1,11 @@
 use std::io::{self, Read};
 
 pub trait ReadRetry {
-    fn read_with_retry(&mut self, buf: &mut [u8]) -> io::Result<()>;
+    fn read_with_retry(&mut self, buf: &mut [u8]) -> io::Result<usize>;
 }
 
 impl<T: Read> ReadRetry for T {
-    fn read_with_retry(&mut self, buf: &mut [u8]) -> io::Result<()> {
+    fn read_with_retry(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let mut bytes_read = 0;
         while bytes_read < buf.len() {
             match self.read(&mut buf[bytes_read..]) {
@@ -23,6 +23,6 @@ impl<T: Read> ReadRetry for T {
             }
         }
 
-        Ok(())
+        Ok(bytes_read)
     }
 }

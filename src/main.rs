@@ -9,6 +9,8 @@ use file::ReadRetry;
 
 mod file;
 
+const TAB_SIZE: usize = 8;
+
 enum EolSequence {
     LF,
     CRLF,
@@ -20,13 +22,18 @@ struct FileChunkIndex {
     first_byte: usize,
     // The length in bytes of this chunk.
     bytes_len: usize,
-    // The "screen space" length of this chunk.
-    display_len: usize,
+    // // The "screen space" length of this chunk.
+    // display_len: usize,
 
     // The first line in this chunk (relative to the first line of the file).
     first_line: usize,
-    // The amount of lines in this chunk.
-    line_count: usize,
+    // The first column of the *first line*.
+    first_column: usize,
+
+    // The last line in this chunk (relative to the first line of the file).
+    last_line: usize,
+    // The last column of the *last line*.
+    last_column: usize,
 }
 
 #[derive(Debug)]
@@ -40,43 +47,92 @@ impl FileIndex {
 
         for l in window.first_line..window.first_line + window.lines {
             // TODO: not unwrap() i guess
-            let first_chunk_index = self
-                .chunks
-                .binary_search_by(|chunk| {
-                    if l < chunk.first_line {
+            // Find the chunk in which line l begins.
+            let Ok(first_chunk_index) = self.chunks.binary_search_by(|chunk| {
+                if l < chunk.first_line {
+                    Ordering::Less
+                } else if l > chunk.last_line {
+                    Ordering::Greater
+                } else if chunk.first_line == chunk.last_line {
+                    if window.first_column < chunk.first_column {
                         Ordering::Less
-                    } else if l > chunk.first_line + chunk.line_count {
+                    } else if window.first_column > chunk.last_column {
                         Ordering::Greater
                     } else {
                         Ordering::Equal
                     }
-                })
-                .unwrap();
+                } else if l == chunk.first_line && window.first_column < chunk.first_column {
+                    Ordering::Less
+                } else if l == chunk.last_line && window.first_column > chunk.last_column {
+                    Ordering::Greater
+                } else {
+                    Ordering::Equal
+                }
+            }) else {
+                // Window first column is past the line's end.
+                s.push('\n');
+                continue;
+            };
 
             let first_chunk = &self.chunks[first_chunk_index];
-            reader.seek(SeekFrom::Start(first_chunk.first_byte as u64));
+            assert!(first_chunk.first_line <= l && l <= first_chunk.last_line);
+            assert!(first_chunk.first_line != l || first_chunk.first_column <= window.first_column);
+            assert!(first_chunk.last_line != l || window.first_column <= first_chunk.last_column);
 
+            // Read first chunk (for finding beginning of first_line).
             let mut buf = vec![0u8; first_chunk.bytes_len];
-            reader.read_with_retry(&mut buf).unwrap();
+            reader.seek(SeekFrom::Start(first_chunk.first_byte as u64));
+            let mut bytes_read = reader.read_with_retry(&mut buf).unwrap();
+            assert_eq!(bytes_read, first_chunk.bytes_len); // TODO: handle
 
-            let mut newlines_read = 0;
             let mut buf_idx = 0;
-            while newlines_read != window.first_line - first_chunk.first_line {
+
+            let mut curr_line = first_chunk.first_line;
+            while curr_line != l {
+                assert!(buf_idx < bytes_read);
+
                 let c = buf[buf_idx];
                 if c == 10 {
-                    newlines_read += 1;
+                    curr_line += 1;
                 }
 
                 buf_idx += 1;
             }
 
+            let mut curr_column = if l == first_chunk.first_line {
+                first_chunk.first_column
+            } else {
+                0
+            };
+            while curr_column < window.first_column {
+                assert!(buf_idx < bytes_read);
+
+                let c = buf[buf_idx];
+                if c == 10 {
+                    // Should not happen
+                    todo!();
+                } else if c == 9 {
+                    // TODO: handle better
+                    curr_column += TAB_SIZE;
+                } else if 32 <= c && c <= 127 {
+                    curr_column += 1;
+                }
+
+                buf_idx += 1;
+            }
+
+            // We found the byte for l at column window.first_column (stored in buf_idx).
+            // Now we will read bytes until reaching (at least) window.columns chars.
             let mut columns_read = 0;
             let mut chunk_index = first_chunk_index;
             loop {
-                while buf_idx < buf.len() && columns_read < window.columns {
+                while buf_idx < bytes_read && columns_read < window.columns {
                     let c = buf[buf_idx];
-                    if c == 9 {
-                        columns_read += 8;
+                    if c == 10 {
+                        columns_read = window.columns;
+                        break;
+                    } else if c == 9 {
+                        columns_read += TAB_SIZE;
                     } else if 32 <= c && c <= 127 {
                         columns_read += 1;
                     }
@@ -93,7 +149,9 @@ impl FileIndex {
                 let chunk = &self.chunks[chunk_index];
                 buf_idx = 0;
                 buf.resize(chunk.bytes_len, 0);
-                reader.read_with_retry(&mut buf).unwrap();
+                bytes_read = reader.read_with_retry(&mut buf).unwrap();
+
+                assert!(bytes_read > 0);
             }
             s.push('\n');
         }
@@ -139,7 +197,7 @@ fn index_file_bytes(s: &str) -> FileIndex {
             panic!("non-ascii found ({})", c);
         } else if c == 9 {
             /* TAB (\t) */
-            line_display_length += 8;
+            line_display_length += TAB_SIZE;
         } else if c == 13 {
             /* CR (\r) */
             cr = true;
