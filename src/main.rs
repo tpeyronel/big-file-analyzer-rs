@@ -19,22 +19,22 @@ enum EolSequence {
 
 fn main() {
     let start = Instant::now();
-    let filename = "index.html";
+    let filename = "1gb.txt";
     let mut editor = BigFileEditor::from_path(filename).unwrap();
 
     println!("Read and indexed file in {}ms", start.elapsed().as_millis());
     println!("{:#?}", editor);
 
+    let window = editor.read_window(&FileWindow {
+        first_line: 181,
+        first_column: 2,
+        lines: 8,
+        columns: 80,
+    });
     println!("Window:");
-    println!(
-        "{}",
-        editor.read_window(&FileWindow {
-            first_line: 2,
-            first_column: 2,
-            lines: 8,
-            columns: 8,
-        },)
-    )
+    println!("--------------------------------------------------------------------------------");
+    print!("{}", window);
+    println!("--------------------------------------------------------------------------------");
     // for line in &indices[..indices.len().min(128)] {
     //     println!("{:?}", line);
     // }

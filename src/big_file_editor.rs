@@ -111,10 +111,7 @@ impl BigFileEditor {
             }
         }
 
-        Self {
-            chunks,
-            reader,
-        }
+        Self { chunks, reader }
     }
 }
 
@@ -122,42 +119,40 @@ impl BigFileEditor {
     pub fn read_window(&mut self, window: &FileWindow) -> String {
         let mut s = String::new();
 
-        for l in window.first_line..window.first_line + window.lines {
-            // Find the chunk in which l:window.first_column is.
-            let Ok(first_chunk_index) = self.chunks.binary_search_by(|chunk| {
-                if l < chunk.first_line {
-                    Ordering::Less
-                } else if l > chunk.last_line {
-                    Ordering::Greater
-                } else if chunk.first_line == chunk.last_line {
-                    if window.first_column < chunk.first_line_offset {
-                        Ordering::Less
-                    } else if window.first_column > chunk.last_line_length {
-                        Ordering::Greater
-                    } else {
-                        Ordering::Equal
-                    }
-                } else if l == chunk.first_line && window.first_column < chunk.first_line_offset {
-                    Ordering::Less
-                } else if l == chunk.last_line && window.first_column > chunk.last_line_length {
-                    Ordering::Greater
-                } else {
-                    Ordering::Equal
-                }
-            }) else {
-                // Window first column is past the line's end.
+        'lines: for l in window.first_line..window.first_line + window.lines {
+            if l != window.first_line {
                 s.push('\n');
+            }
+
+            println!("{}", s);
+            // Find the chunk in which l:window.first_column is.
+            println!("({}, {})", l, window.first_column);
+            let Some(first_chunk_index) = self.find_chunk_by_coordinates(l, window.first_column)
+            else {
+                // The line does not exist or window.first_column is past the line's end.
+                s.push('\n');
+                println!(":/");
                 continue;
             };
 
             let first_chunk = &self.chunks[first_chunk_index];
             assert!(first_chunk.first_line <= l && l <= first_chunk.last_line);
-            assert!(first_chunk.first_line != l || first_chunk.first_line_offset <= window.first_column);
-            assert!(first_chunk.last_line != l || window.first_column <= first_chunk.last_line_length);
+            assert!(
+                first_chunk.first_line != l || first_chunk.first_line_offset <= window.first_column
+            );
+            assert!(
+                first_chunk.last_line != l || window.first_column <= first_chunk.last_line_length
+            );
+            println!("{:#?}", first_chunk);
 
-            // Read first chunk (for finding beginning of first_line).
+            // We know that l:window.first_column is somewhere inside first_chunk.
+            // Now we need to find exactly where it is.
+
+            // Read first chunk.
             let mut buf = vec![0u8; first_chunk.bytes_len];
-            self.reader.seek(SeekFrom::Start(first_chunk.first_byte as u64));
+            self.reader
+                .seek(SeekFrom::Start(first_chunk.first_byte as u64))
+                .expect("TODO");
             let mut bytes_read = self.reader.read_with_retry(&mut buf).unwrap();
             assert_eq!(bytes_read, first_chunk.bytes_len); // TODO: handle
 
@@ -168,7 +163,7 @@ impl BigFileEditor {
                 assert!(buf_idx < bytes_read);
 
                 let c = buf[buf_idx];
-                if c == 10 {
+                if c == ASCII_LF {
                     curr_line += 1;
                 }
 
@@ -184,10 +179,12 @@ impl BigFileEditor {
                 assert!(buf_idx < bytes_read);
 
                 let c = buf[buf_idx];
-                if c == 10 {
-                    // Should not happen
-                    todo!();
-                } else if c == 9 {
+                if c == ASCII_LF {
+                    // We reached EOL but we haven't even reached the first column.
+                    // This simply means that this line does not enter the window.
+                    // Therefore, we simply go to the next line.
+                    continue 'lines;
+                } else if c == ASCII_HT {
                     // TODO: handle better
                     curr_column += TAB_SIZE;
                 } else if 32 <= c && c <= 127 {
@@ -204,10 +201,10 @@ impl BigFileEditor {
             loop {
                 while buf_idx < bytes_read && columns_read < window.columns {
                     let c = buf[buf_idx];
-                    if c == 10 {
+                    if c == ASCII_LF {
                         columns_read = window.columns;
                         break;
-                    } else if c == 9 {
+                    } else if c == ASCII_HT {
                         columns_read += TAB_SIZE;
                     } else if 32 <= c && c <= 127 {
                         columns_read += 1;
@@ -229,10 +226,37 @@ impl BigFileEditor {
 
                 assert!(bytes_read > 0);
             }
-            s.push('\n');
         }
 
         return s;
+    }
+
+    fn find_chunk_by_coordinates(&self, line: usize, column: usize) -> Option<usize> {
+        self.chunks
+            .binary_search_by(|chunk| {
+                if line < chunk.first_line {
+                    Ordering::Greater
+                } else if line > chunk.last_line {
+                    Ordering::Less
+                } else if chunk.first_line == chunk.last_line {
+                    // (by sandwich, chunk.first_line == l == chunk.last_line)
+
+                    if column < chunk.first_line_offset {
+                        Ordering::Greater
+                    } else if column >= chunk.first_line_offset + chunk.last_line_length {
+                        Ordering::Less
+                    } else {
+                        Ordering::Equal
+                    }
+                } else if line == chunk.first_line && column < chunk.first_line_offset {
+                    Ordering::Greater
+                } else if line == chunk.last_line && column >= chunk.last_line_length {
+                    Ordering::Less
+                } else {
+                    Ordering::Equal
+                }
+            })
+            .ok()
     }
 }
 
@@ -251,5 +275,6 @@ struct FileChunkIndex {
 
     // The last line in this chunk (relative to the first line of the file).
     last_line: usize,
+    // If first_line = last_line, then this length is relative to first_line_offset.
     last_line_length: usize,
 }
