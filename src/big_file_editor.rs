@@ -13,7 +13,7 @@ const ASCII_HT: u8 = 9;
 const ASCII_LF: u8 = 10;
 const ASCII_CR: u8 = 13;
 
-const CHUNK_SIZE: usize = 64;
+const CHUNK_SIZE: usize = 4096;
 
 #[derive(Debug)]
 pub struct FileWindow {
@@ -58,11 +58,6 @@ impl BigFileEditor {
 
             for i in 0..bytes_read as u32 {
                 let c = buf[i as usize];
-                if 32 <= c && c <= 127 {
-                    print!("{}", c as char);
-                } else {
-                    print!("\\{}", c);
-                }
 
                 if c == ASCII_LF {
                     lines += 1;
@@ -84,8 +79,6 @@ impl BigFileEditor {
                         last_line: first_line + lines,
                         last_line_length: columns,
                     });
-                    println!();
-                    println!("{:#?}", chunks.last().unwrap());
 
                     chunk_first_byte += chunk_bytes;
                     chunk_bytes = 0;
@@ -106,8 +99,6 @@ impl BigFileEditor {
                     last_line: first_line + lines,
                     last_line_length: columns,
                 });
-                println!();
-                println!("{:#?}", chunks.last().unwrap());
             }
         }
 
@@ -124,14 +115,11 @@ impl BigFileEditor {
                 s.push('\n');
             }
 
-            println!("{}", s);
             // Find the chunk in which l:window.first_column is.
-            println!("({}, {})", l, window.first_column);
             let Some(first_chunk_index) = self.find_chunk_by_coordinates(l, window.first_column)
             else {
                 // The line does not exist or window.first_column is past the line's end.
                 s.push('\n');
-                println!(":/");
                 continue;
             };
 
@@ -143,7 +131,6 @@ impl BigFileEditor {
             assert!(
                 first_chunk.last_line != l || window.first_column <= first_chunk.last_line_length
             );
-            println!("{:#?}", first_chunk);
 
             // We know that l:window.first_column is somewhere inside first_chunk.
             // Now we need to find exactly where it is.

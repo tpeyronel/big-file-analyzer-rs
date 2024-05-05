@@ -23,19 +23,18 @@ fn main() {
     let mut editor = BigFileEditor::from_path(filename).unwrap();
 
     println!("Read and indexed file in {}ms", start.elapsed().as_millis());
-    println!("{:#?}", editor);
+    // println!("{:#?}", editor);
 
+    let start = Instant::now();
     let window = editor.read_window(&FileWindow {
         first_line: 181,
         first_column: 2,
         lines: 8,
         columns: 80,
     });
+    println!("Read window in {}ms", start.elapsed().as_millis());
     println!("Window:");
     println!("--------------------------------------------------------------------------------");
     print!("{}", window);
     println!("--------------------------------------------------------------------------------");
-    // for line in &indices[..indices.len().min(128)] {
-    //     println!("{:?}", line);
-    // }
 }
