@@ -63,8 +63,8 @@ impl BigFileEditor {
                     lines += 1;
                     columns = 0;
                 } else if c == ASCII_HT {
-                    columns += TAB_SIZE;
-                } else if 32 <= c && c <= 127 {
+                    columns += TAB_SIZE - (columns % TAB_SIZE);
+                } else if c != ASCII_CR && c <= 127 {
                     columns += 1;
                 }
 
