@@ -89,17 +89,17 @@ impl BigFileEditor {
                     lines = 0;
                 }
             }
+        }
 
-            if chunk_bytes > 0 {
-                chunks.push(FileChunkIndex {
-                    first_byte: chunk_first_byte,
-                    bytes_len: chunk_bytes,
-                    first_line,
-                    first_line_offset: first_column,
-                    last_line: first_line + lines,
-                    last_line_length: columns,
-                });
-            }
+        if chunk_bytes > 0 {
+            chunks.push(FileChunkIndex {
+                first_byte: chunk_first_byte,
+                bytes_len: chunk_bytes,
+                first_line,
+                first_line_offset: first_column,
+                last_line: first_line + lines,
+                last_line_length: columns,
+            });
         }
 
         Self { chunks, reader }
