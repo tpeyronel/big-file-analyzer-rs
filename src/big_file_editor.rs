@@ -1,7 +1,7 @@
 use std::{
     cmp::Ordering,
     fs::File,
-    io::{self, BufReader, Read, Seek, SeekFrom},
+    io::{self, BufReader, Cursor, Read, Seek, SeekFrom},
     path::Path,
 };
 
@@ -24,22 +24,27 @@ pub struct FileWindow {
 }
 
 #[derive(Debug)]
-pub struct BigFileEditor {
+pub struct BigFileEditor<T: Read + Seek> {
     chunks: Vec<FileChunkIndex>,
-    reader: BufReader<File>,
+    reader: T,
 }
 
-impl BigFileEditor {
+impl BigFileEditor<BufReader<File>> {
     pub fn from_path<P: AsRef<Path>>(path: P) -> io::Result<Self> {
         let file = File::open(path)?;
         Ok(Self::from_file(file))
     }
+}
 
+impl BigFileEditor<BufReader<File>> {
     pub fn from_file(file: File) -> Self {
         Self::from_reader(std::io::BufReader::new(file))
     }
+}
 
-    pub fn from_reader(mut reader: BufReader<File>) -> Self {
+impl<T: Read + Seek> BigFileEditor<T> {
+    pub fn from_reader(mut reader: T) -> Self {
+        // TODO: seek 0 (?
         let mut buf = vec![0; 64 * 1024 * 1024];
 
         let mut chunks = vec![];
@@ -104,9 +109,7 @@ impl BigFileEditor {
 
         Self { chunks, reader }
     }
-}
 
-impl BigFileEditor {
     pub fn read_window(&mut self, window: &FileWindow) -> String {
         let mut s = String::new();
 
@@ -247,7 +250,13 @@ impl BigFileEditor {
     }
 }
 
-#[derive(Debug)]
+impl BigFileEditor<Cursor<String>> {
+    fn from_str(s: &str) -> Self {
+        Self::from_reader(Cursor::new(s.to_owned()))
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
 struct FileChunkIndex {
     // The first byte of this chunk (relative to the beginning of the file).
     first_byte: usize,
@@ -264,4 +273,124 @@ struct FileChunkIndex {
     last_line: usize,
     // If first_line = last_line, then this length is relative to first_line_offset.
     last_line_length: usize,
+}
+
+#[cfg(test)]
+mod indexing_tests {
+    use super::*;
+
+    fn single_chunk_test(s: &str, expected: FileChunkIndex) {
+        let editor = BigFileEditor::from_str(s);
+        assert!(editor.chunks.len() == 1);
+        let chunk = editor.chunks.first().unwrap();
+        assert_eq!(*chunk, expected);
+    }
+
+    #[test]
+    fn empty_file() {
+        let editor = BigFileEditor::from_str("");
+
+        assert!(editor.chunks.is_empty());
+    }
+
+    #[test]
+    fn one_char() {
+        single_chunk_test(
+            "a",
+            FileChunkIndex {
+                first_byte: 0,
+                bytes_len: 1,
+                first_line: 0,
+                first_line_offset: 0,
+                last_line: 0,
+                last_line_length: 1,
+            },
+        );
+    }
+
+    #[test]
+    fn two_chars() {
+        single_chunk_test(
+            "aa",
+            FileChunkIndex {
+                first_byte: 0,
+                bytes_len: 2,
+                first_line: 0,
+                first_line_offset: 0,
+                last_line: 0,
+                last_line_length: 2,
+            },
+        );
+    }
+
+    #[test]
+    fn aligned_tab() {
+        single_chunk_test(
+            "\taa",
+            FileChunkIndex {
+                first_byte: 0,
+                bytes_len: 3,
+                first_line: 0,
+                first_line_offset: 0,
+                last_line: 0,
+                last_line_length: TAB_SIZE + 2,
+            },
+        );
+    }
+
+    #[test]
+    fn non_aligned_tab() {
+        single_chunk_test(
+            "aa\taa",
+            FileChunkIndex {
+                first_byte: 0,
+                bytes_len: 5,
+                first_line: 0,
+                first_line_offset: 0,
+                last_line: 0,
+                last_line_length: TAB_SIZE + 2,
+            },
+        );
+    }
+
+    #[test]
+    fn far_aligned_tab() {
+        single_chunk_test(
+            "aaaabbbbccccdddd\taa",
+            FileChunkIndex {
+                first_byte: 0,
+                bytes_len: 16 + 1 + 2,
+                first_line: 0,
+                first_line_offset: 0,
+                last_line: 0,
+                last_line_length: 16 + TAB_SIZE + 2,
+            },
+        );
+    }
+
+    #[test]
+    fn far_non_aligned_tab() {
+        single_chunk_test(
+            "aaaabbbbccccddddaa\taa",
+            FileChunkIndex {
+                first_byte: 0,
+                bytes_len: 16 + 2 + 1 + 2,
+                first_line: 0,
+                first_line_offset: 0,
+                last_line: 0,
+                last_line_length: 16 + TAB_SIZE + 2,
+            },
+        );
+        single_chunk_test(
+            "aaaabbbbccccddddaaaabb\taa",
+            FileChunkIndex {
+                first_byte: 0,
+                bytes_len: 16 + 6 + 1 + 2,
+                first_line: 0,
+                first_line_offset: 0,
+                last_line: 0,
+                last_line_length: 16 + TAB_SIZE + 2,
+            },
+        );
+    }
 }
