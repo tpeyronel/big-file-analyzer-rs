@@ -400,4 +400,33 @@ mod indexing_tests {
             },
         );
     }
+
+    #[test]
+    fn control_chars() {
+        single_chunk_test(
+            // Special characters are \x09 (\t), \x0A (\n), and \x0D (\r)
+            // Both the \x0A and the \x0D should be treated as a new line.
+            "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0A\x0B\x0C\x0D\x0E\x0F",
+            FileChunkIndex {
+                first_byte: 0,
+                bytes_len: 16,
+                first_line: 0,
+                first_line_offset: 0,
+                last_line: 2,
+                last_line_length: 2,
+            },
+        );
+        single_chunk_test(
+            // All of these characters are considered garbage,
+            "\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1A\x1B\x1C\x1D\x1E\x1F",
+            FileChunkIndex {
+                first_byte: 0,
+                bytes_len: 16,
+                first_line: 0,
+                first_line_offset: 0,
+                last_line: 0,
+                last_line_length: 16,
+            },
+        );
+    }
 }
