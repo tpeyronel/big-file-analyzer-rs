@@ -72,25 +72,15 @@ impl<T: Read + Seek> BigFileEditor<T> {
             for i in 0..bytes_read as u32 {
                 let c = buf[i as usize];
 
-                if c == ASCII_CR {
-                    lines += 1;
-                    columns = 0;
-                } else if c == ASCII_LF {
-                    if !prev_cr {
-                        lines += 1;
-                        columns = 0;
-                    }
-                } else if c == ASCII_HT {
-                    columns += TAB_SIZE - (columns % TAB_SIZE);
-                } else if c <= 127 {
-                    columns += 1;
-                }
-                // TODO: handle UTF-8
-
-                chunk_bytes += 1;
-                prev_cr = c == ASCII_CR;
-
-                if chunk_bytes >= CHUNK_SIZE {
+                // We want to make sure that we dont split a \r\n between two chunks.
+                // That's why we check for (!prev_cr || c != ASCII_LF).
+                // That's also the reason why we push *before* processing c.
+                // Explanation: if !prev_cr, then we can push as there is no risk of \r\n,
+                // but if prev_cr, then there are two cases: c == \n or c != \n.
+                // If c == \n, then we *don't* push, because we want that character inside the
+                // chunk (it will be pushed in the next iteration, as prev_cr will be false).
+                // If c != \n, then we can safely push.
+                if chunk_bytes >= CHUNK_SIZE && (!prev_cr || c != ASCII_LF) {
                     chunks.push(FileChunkIndex {
                         first_byte: chunk_first_byte,
                         bytes_len: chunk_bytes,
@@ -108,6 +98,24 @@ impl<T: Read + Seek> BigFileEditor<T> {
 
                     lines = 0;
                 }
+
+                if c == ASCII_CR {
+                    lines += 1;
+                    columns = 0;
+                } else if c == ASCII_LF {
+                    if !prev_cr {
+                        lines += 1;
+                        columns = 0;
+                    }
+                } else if c == ASCII_HT {
+                    columns += TAB_SIZE - (columns % TAB_SIZE);
+                } else if c <= 127 {
+                    columns += 1;
+                }
+                // TODO: handle UTF-8
+
+                chunk_bytes += 1;
+                prev_cr = c == ASCII_CR;
             }
         }
 
@@ -276,6 +284,10 @@ impl BigFileEditor<Cursor<String>> {
     }
 }
 
+// TODO: we probably don't need to store last_line and last_line_length
+// This is because we could perform binary search based on just first_line
+// and first_line_offset, and (most of the time), we would get returned
+// Err(idx), where idx is actually correct.
 #[derive(Debug, PartialEq, Eq)]
 struct FileChunkIndex {
     // The first byte of this chunk (relative to the beginning of the file).
