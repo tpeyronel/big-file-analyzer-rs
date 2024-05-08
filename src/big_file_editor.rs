@@ -442,6 +442,23 @@ mod indexing_tests {
     }
 
     #[test]
+    fn control_chars_of_width_1() {
+        single_chunk_test(
+            // Every control char except \t, \r, and \n.
+            // Therefore, we have 29 control chars, all of width 1.
+            "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x0B\x0C\x0E\x0F\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1A\x1B\x1C\x1D\x1E\x1F",
+            FileChunkIndex {
+                first_byte: 0,
+                bytes_len: 29,
+                first_line: 0,
+                first_line_offset: 0,
+                last_line: 0,
+                last_line_length: 29,
+            },
+        );
+    }
+
+    #[test]
     fn newlines_lf() {
         single_chunk_test(
             "\n\n\n\n",
