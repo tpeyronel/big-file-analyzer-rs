@@ -55,6 +55,7 @@ impl<T: Read + Seek> BigFileEditor<T> {
         let mut columns = 0;
         let mut chunk_first_byte = 0;
         let mut chunk_bytes = 0;
+        let mut prev_cr = false;
         loop {
             let bytes_read = reader.read(&mut buf).expect("TODO");
             if bytes_read == 0 {
@@ -64,16 +65,20 @@ impl<T: Read + Seek> BigFileEditor<T> {
             for i in 0..bytes_read as u32 {
                 let c = buf[i as usize];
 
-                if c == ASCII_LF {
+                if c == ASCII_CR {
+                    lines += 1;
+                    columns = 0;
+                } else if c == ASCII_LF && !prev_cr {
                     lines += 1;
                     columns = 0;
                 } else if c == ASCII_HT {
                     columns += TAB_SIZE - (columns % TAB_SIZE);
-                } else if c != ASCII_CR && c <= 127 {
+                } else if c <= 127 {
                     columns += 1;
                 }
 
                 chunk_bytes += 1;
+                prev_cr = c == ASCII_CR;
 
                 if chunk_bytes >= CHUNK_SIZE {
                     chunks.push(FileChunkIndex {
