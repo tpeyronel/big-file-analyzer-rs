@@ -51,6 +51,7 @@ impl BigFileEditor<BufReader<File>> {
 impl<T: Read + Seek> BigFileEditor<T> {
     pub fn from_reader(mut reader: T) -> Self {
         // TODO: seek 0 (?
+        // TODO: handle potential UTF-8 BOM.
         let mut buf = vec![0; 64 * 1024 * 1024];
 
         let mut chunks = vec![];
@@ -84,6 +85,7 @@ impl<T: Read + Seek> BigFileEditor<T> {
                 } else if c <= 127 {
                     columns += 1;
                 }
+                // TODO: handle UTF-8
 
                 chunk_bytes += 1;
                 prev_cr = c == ASCII_CR;
@@ -127,7 +129,7 @@ impl<T: Read + Seek> BigFileEditor<T> {
         let mut lines = vec![];
 
         for l in frame.first_line..frame.first_line + frame.lines {
-            let line = self.read_line(frame, l);
+            let line = self.read_line(l, frame.first_column, frame.columns);
             lines.push(line);
         }
 
@@ -137,17 +139,17 @@ impl<T: Read + Seek> BigFileEditor<T> {
         };
     }
 
-    fn read_line(&mut self, frame: &FileWindowFrame, l: usize) -> String {
+    fn read_line(&mut self, l: usize, first_column: usize, columns: usize) -> String {
         // Find the chunk in which l:window.first_column is.
-        let Some(first_chunk_index) = self.find_chunk_by_coordinates(l, frame.first_column) else {
+        let Some(first_chunk_index) = self.find_chunk_by_coordinates(l, first_column) else {
             // The line does not exist or window.first_column is past the line's end.
             return String::new();
         };
 
         let first_chunk = &self.chunks[first_chunk_index];
         assert!(first_chunk.first_line <= l && l <= first_chunk.last_line);
-        assert!(first_chunk.first_line != l || first_chunk.first_line_offset <= frame.first_column);
-        assert!(first_chunk.last_line != l || frame.first_column <= first_chunk.last_line_length);
+        assert!(first_chunk.first_line != l || first_chunk.first_line_offset <= first_column);
+        assert!(first_chunk.last_line != l || first_column <= first_chunk.last_line_length);
 
         // We know that l:window.first_column is somewhere inside first_chunk.
         // Now we need to find exactly where it is.
@@ -179,7 +181,7 @@ impl<T: Read + Seek> BigFileEditor<T> {
         } else {
             0
         };
-        while curr_column < frame.first_column {
+        while curr_column < first_column {
             assert!(buf_idx < bytes_read);
 
             let c = buf[buf_idx];
@@ -204,10 +206,10 @@ impl<T: Read + Seek> BigFileEditor<T> {
         let mut columns_read = 0;
         let mut chunk_index = first_chunk_index;
         loop {
-            while buf_idx < bytes_read && columns_read < frame.columns {
+            while buf_idx < bytes_read && columns_read < columns {
                 let c = buf[buf_idx];
                 if c == ASCII_LF {
-                    columns_read = frame.columns;
+                    columns_read = columns;
                     break;
                 } else if c == ASCII_HT {
                     columns_read += TAB_SIZE;
@@ -223,7 +225,7 @@ impl<T: Read + Seek> BigFileEditor<T> {
             // If we read all the requested columns,
             // or if we reached EOF (indicated by having no further chunks),
             // then break and return what we have read.
-            if columns_read >= frame.columns || chunk_index >= self.chunks.len() {
+            if columns_read >= columns || chunk_index >= self.chunks.len() {
                 break;
             }
 
