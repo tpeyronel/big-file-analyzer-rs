@@ -7,7 +7,7 @@ use std::{
 
 use file::ReadRetry;
 
-use crate::big_file_editor::{BigFileEditor, FileWindow};
+use crate::big_file_editor::{BigFileEditor, FileWindowFrame};
 
 mod big_file_editor;
 mod file;
@@ -26,15 +26,18 @@ fn main() {
     // println!("{:#?}", editor);
 
     let start = Instant::now();
-    let window = editor.read_window(&FileWindow {
+    let window = editor.read_window(&FileWindowFrame {
         first_line: 181,
         first_column: 2,
         lines: 8,
         columns: 80,
     });
     println!("Read window in {}ms", start.elapsed().as_millis());
+
     println!("Window:");
     println!("--------------------------------------------------------------------------------");
-    print!("{}", window);
+    for line in &window.lines {
+        println!("|{}", line);
+    }
     println!("--------------------------------------------------------------------------------");
 }

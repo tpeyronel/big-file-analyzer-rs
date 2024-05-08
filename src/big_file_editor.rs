@@ -15,12 +15,18 @@ const ASCII_CR: u8 = 13;
 
 const CHUNK_SIZE: usize = 4096;
 
-#[derive(Debug)]
-pub struct FileWindow {
+#[derive(Debug, Clone)]
+pub struct FileWindowFrame {
     pub first_line: usize,
     pub first_column: usize,
     pub lines: usize,
     pub columns: usize,
+}
+
+#[derive(Debug)]
+pub struct FileWindow {
+    pub lines: Vec<String>,
+    pub frame: FileWindowFrame,
 }
 
 #[derive(Debug)]
@@ -117,115 +123,120 @@ impl<T: Read + Seek> BigFileEditor<T> {
         Self { chunks, reader }
     }
 
-    pub fn read_window(&mut self, window: &FileWindow) -> String {
-        let mut s = String::new();
+    pub fn read_window(&mut self, frame: &FileWindowFrame) -> FileWindow {
+        let mut lines = vec![];
 
-        'lines: for l in window.first_line..window.first_line + window.lines {
-            if l != window.first_line {
-                s.push('\n');
-            }
-
-            // Find the chunk in which l:window.first_column is.
-            let Some(first_chunk_index) = self.find_chunk_by_coordinates(l, window.first_column)
-            else {
-                // The line does not exist or window.first_column is past the line's end.
-                s.push('\n');
-                continue;
-            };
-
-            let first_chunk = &self.chunks[first_chunk_index];
-            assert!(first_chunk.first_line <= l && l <= first_chunk.last_line);
-            assert!(
-                first_chunk.first_line != l || first_chunk.first_line_offset <= window.first_column
-            );
-            assert!(
-                first_chunk.last_line != l || window.first_column <= first_chunk.last_line_length
-            );
-
-            // We know that l:window.first_column is somewhere inside first_chunk.
-            // Now we need to find exactly where it is.
-
-            // Read first chunk.
-            let mut buf = vec![0u8; first_chunk.bytes_len];
-            self.reader
-                .seek(SeekFrom::Start(first_chunk.first_byte as u64))
-                .expect("TODO");
-            let mut bytes_read = self.reader.read_with_retry(&mut buf).unwrap();
-            assert_eq!(bytes_read, first_chunk.bytes_len); // TODO: handle
-
-            let mut buf_idx = 0;
-
-            let mut curr_line = first_chunk.first_line;
-            while curr_line != l {
-                assert!(buf_idx < bytes_read);
-
-                let c = buf[buf_idx];
-                if c == ASCII_LF {
-                    curr_line += 1;
-                }
-
-                buf_idx += 1;
-            }
-
-            let mut curr_column = if l == first_chunk.first_line {
-                first_chunk.first_line_offset
-            } else {
-                0
-            };
-            while curr_column < window.first_column {
-                assert!(buf_idx < bytes_read);
-
-                let c = buf[buf_idx];
-                if c == ASCII_LF {
-                    // We reached EOL but we haven't even reached the first column.
-                    // This simply means that this line does not enter the window.
-                    // Therefore, we simply go to the next line.
-                    continue 'lines;
-                } else if c == ASCII_HT {
-                    // TODO: handle better
-                    curr_column += TAB_SIZE;
-                } else if 32 <= c && c <= 127 {
-                    curr_column += 1;
-                }
-
-                buf_idx += 1;
-            }
-
-            // We found the byte for l at column window.first_column (stored in buf_idx).
-            // Now we will read bytes until reaching (at least) window.columns chars.
-            let mut columns_read = 0;
-            let mut chunk_index = first_chunk_index;
-            loop {
-                while buf_idx < bytes_read && columns_read < window.columns {
-                    let c = buf[buf_idx];
-                    if c == ASCII_LF {
-                        columns_read = window.columns;
-                        break;
-                    } else if c == ASCII_HT {
-                        columns_read += TAB_SIZE;
-                    } else if 32 <= c && c <= 127 {
-                        columns_read += 1;
-                    }
-                    s.push(c as char);
-                    buf_idx += 1;
-                }
-
-                chunk_index += 1;
-
-                if columns_read >= window.columns || chunk_index >= self.chunks.len() {
-                    break;
-                }
-
-                let chunk = &self.chunks[chunk_index];
-                buf_idx = 0;
-                buf.resize(chunk.bytes_len, 0);
-                bytes_read = self.reader.read_with_retry(&mut buf).unwrap();
-
-                assert!(bytes_read > 0);
-            }
+        for l in frame.first_line..frame.first_line + frame.lines {
+            let line = self.read_line(frame, l);
+            lines.push(line);
         }
 
-        return s;
+        return FileWindow {
+            lines,
+            frame: frame.clone(),
+        };
+    }
+
+    fn read_line(&mut self, frame: &FileWindowFrame, l: usize) -> String {
+        // Find the chunk in which l:window.first_column is.
+        let Some(first_chunk_index) = self.find_chunk_by_coordinates(l, frame.first_column) else {
+            // The line does not exist or window.first_column is past the line's end.
+            return String::new();
+        };
+
+        let first_chunk = &self.chunks[first_chunk_index];
+        assert!(first_chunk.first_line <= l && l <= first_chunk.last_line);
+        assert!(first_chunk.first_line != l || first_chunk.first_line_offset <= frame.first_column);
+        assert!(first_chunk.last_line != l || frame.first_column <= first_chunk.last_line_length);
+
+        // We know that l:window.first_column is somewhere inside first_chunk.
+        // Now we need to find exactly where it is.
+
+        // Read first chunk.
+        let mut buf = vec![0u8; first_chunk.bytes_len];
+        self.reader
+            .seek(SeekFrom::Start(first_chunk.first_byte as u64))
+            .expect("TODO");
+        let mut bytes_read = self.reader.read_with_retry(&mut buf).unwrap();
+        assert_eq!(bytes_read, first_chunk.bytes_len); // TODO: handle
+
+        let mut buf_idx = 0;
+
+        let mut curr_line = first_chunk.first_line;
+        while curr_line != l {
+            assert!(buf_idx < bytes_read);
+
+            let c = buf[buf_idx];
+            if c == ASCII_LF {
+                curr_line += 1;
+            }
+
+            buf_idx += 1;
+        }
+
+        let mut curr_column = if l == first_chunk.first_line {
+            first_chunk.first_line_offset
+        } else {
+            0
+        };
+        while curr_column < frame.first_column {
+            assert!(buf_idx < bytes_read);
+
+            let c = buf[buf_idx];
+            if c == ASCII_LF {
+                // We reached EOL but we haven't even reached the first column.
+                // This simply means that this line does not reach the window.
+                // Therefore, we simply go to the next line.
+                return String::new();
+            } else if c == ASCII_HT {
+                // TODO: handle better
+                curr_column += TAB_SIZE;
+            } else if 32 <= c && c <= 127 {
+                curr_column += 1;
+            }
+
+            buf_idx += 1;
+        }
+
+        // We found the byte for l at column window.first_column (stored in buf_idx).
+        // Now we will read bytes until reaching (at least) window.columns chars.
+        let mut line = String::new();
+        let mut columns_read = 0;
+        let mut chunk_index = first_chunk_index;
+        loop {
+            while buf_idx < bytes_read && columns_read < frame.columns {
+                let c = buf[buf_idx];
+                if c == ASCII_LF {
+                    columns_read = frame.columns;
+                    break;
+                } else if c == ASCII_HT {
+                    columns_read += TAB_SIZE;
+                } else if 32 <= c && c <= 127 {
+                    columns_read += 1;
+                }
+                line.push(c as char);
+                buf_idx += 1;
+            }
+
+            chunk_index += 1;
+
+            // If we read all the requested columns,
+            // or if we reached EOF (indicated by having no further chunks),
+            // then break and return what we have read.
+            if columns_read >= frame.columns || chunk_index >= self.chunks.len() {
+                break;
+            }
+
+            // Prepare for next iteration by reading the next chunk.
+            let chunk = &self.chunks[chunk_index];
+            buf_idx = 0;
+            buf.resize(chunk.bytes_len, 0);
+            bytes_read = self.reader.read_with_retry(&mut buf).expect("TODO");
+
+            assert!(bytes_read > 0);
+        }
+
+        line
     }
 
     fn find_chunk_by_coordinates(&self, line: usize, column: usize) -> Option<usize> {
