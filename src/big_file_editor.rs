@@ -429,4 +429,64 @@ mod indexing_tests {
             },
         );
     }
+
+    #[test]
+    fn newlines_lf() {
+        single_chunk_test(
+            "\n\n\n\n",
+            FileChunkIndex {
+                first_byte: 0,
+                bytes_len: 4,
+                first_line: 0,
+                first_line_offset: 0,
+                last_line: 4,
+                last_line_length: 0,
+            },
+        );
+    }
+
+    #[test]
+    fn newlines_crlf() {
+        single_chunk_test(
+            "\r\n\r\n\r\n\r\n",
+            FileChunkIndex {
+                first_byte: 0,
+                bytes_len: 8,
+                first_line: 0,
+                first_line_offset: 0,
+                last_line: 4,
+                last_line_length: 0,
+            },
+        );
+    }
+
+    #[test]
+    fn newlines_cr() {
+        single_chunk_test(
+            "\r\r\r\r",
+            FileChunkIndex {
+                first_byte: 0,
+                bytes_len: 4,
+                first_line: 0,
+                first_line_offset: 0,
+                last_line: 4,
+                last_line_length: 0,
+            },
+        );
+    }
+
+    #[test]
+    fn newlines_all_mixed() {
+        single_chunk_test(
+            "\n\r\n\r\r\n\n",
+            FileChunkIndex {
+                first_byte: 0,
+                bytes_len: 7,
+                first_line: 0,
+                first_line_offset: 0,
+                last_line: 5,
+                last_line_length: 0,
+            },
+        );
+    }
 }
