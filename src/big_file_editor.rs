@@ -68,9 +68,11 @@ impl<T: Read + Seek> BigFileEditor<T> {
                 if c == ASCII_CR {
                     lines += 1;
                     columns = 0;
-                } else if c == ASCII_LF && !prev_cr {
-                    lines += 1;
-                    columns = 0;
+                } else if c == ASCII_LF {
+                    if !prev_cr {
+                        lines += 1;
+                        columns = 0;
+                    }
                 } else if c == ASCII_HT {
                     columns += TAB_SIZE - (columns % TAB_SIZE);
                 } else if c <= 127 {
