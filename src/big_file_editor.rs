@@ -15,7 +15,7 @@ const ASCII_CR: u8 = 13;
 
 const CHUNK_SIZE: usize = 4096;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileWindowFrame {
     pub first_line: usize,
     pub first_column: usize,
@@ -568,5 +568,101 @@ mod indexing_tests {
                 last_line_length: 0,
             },
         );
+    }
+}
+
+#[cfg(test)]
+mod reading_tests {
+    use super::*;
+
+    #[test]
+    fn read_0x0() {
+        let file = concat!(
+            "\n",
+            "a\n",
+            "bb\n",
+            "ccc\n",
+            "dddd\n",
+            "eeeee\n",
+            "ffffff\n",
+            "ggggggg\n",
+        );
+
+        let mut editor = BigFileEditor::from_str(file);
+
+        let frame = FileWindowFrame {
+            first_line: 0,
+            first_column: 0,
+            lines: 0,
+            columns: 0,
+        };
+        let window = editor.read_window(&frame);
+        assert!(window.lines.is_empty());
+        assert_eq!(window.frame, frame);
+
+        let frame = FileWindowFrame {
+            first_line: 1,
+            first_column: 1,
+            lines: 0,
+            columns: 0,
+        };
+        let window = editor.read_window(&frame);
+        assert!(window.lines.is_empty());
+
+        let frame = FileWindowFrame {
+            first_line: 17,
+            first_column: 17,
+            lines: 0,
+            columns: 0,
+        };
+        let window = editor.read_window(&frame);
+        assert!(window.lines.is_empty());
+    }
+
+    #[test]
+    fn read_1x1() {
+        test_1x1(0, 0, "\n");
+        test_1x1(1, 0, "a");
+        test_1x1(1, 1, "a\n");
+        test_1x1(1, 2, "a\n");
+        test_1x1(1, TAB_SIZE, "");
+        test_1x1(4, 0, "d");
+        test_1x1(4, 1, "dd");
+        test_1x1(4, TAB_SIZE, "\n");
+        test_1x1(5, TAB_SIZE, "e");
+        test_1x1(5, 2 * TAB_SIZE, "\n");
+
+        fn test_1x1(first_line: usize, first_column: usize, expected_line: &str) {
+            let file = concat!(
+                "\n",
+                "a\n",
+                "bb\n",
+                "cccc\n",
+                "dddddddd\n",
+                "eeeeeeeeeeeeeeee\n",
+                "ffffffffffffffffffffffffffffffff\n",
+                "gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg\n",
+            );
+
+            let mut editor = BigFileEditor::from_str(file);
+
+            let frame = FileWindowFrame {
+                first_line,
+                first_column,
+                lines: 1,
+                columns: 1,
+            };
+
+            let window = editor.read_window(&frame);
+            assert_eq!(
+                window.frame,
+                FileWindowFrame {
+                    first_column: frame.first_column - (frame.first_column % TAB_SIZE),
+                    ..frame
+                }
+            );
+            assert_eq!(window.lines.len(), 1);
+            assert_eq!(window.lines[0], expected_line.to_string());
+        }
     }
 }
