@@ -130,10 +130,11 @@ impl<T: Read + Seek> BigFileEditor<T> {
     pub fn read_window(&mut self, frame: &FileWindowFrame) -> FileWindow {
         let mut lines = vec![];
 
-        let first_column = frame.first_column - (frame.first_column % TAB_SIZE);
+        let alignment_offset = frame.first_column % TAB_SIZE;
+        let first_column = frame.first_column - alignment_offset;
 
         for l in frame.first_line..frame.first_line + frame.lines {
-            let line = self.read_line(l, first_column, frame.columns);
+            let line = self.read_line(l, first_column, frame.columns + alignment_offset);
             lines.push(line);
         }
 
