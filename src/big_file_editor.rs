@@ -30,6 +30,13 @@ pub struct FileWindow {
 }
 
 #[derive(Debug)]
+struct WalkState {
+    curr_line: usize,
+    curr_column: usize,
+    prev_cr: bool,
+}
+
+#[derive(Debug)]
 pub struct BigFileEditor<T: Read + Seek> {
     chunks: Vec<FileChunkIndex>,
     reader: T,
@@ -58,11 +65,14 @@ impl<T: Read + Seek> BigFileEditor<T> {
 
         let mut first_line = 0;
         let mut first_column = 0;
-        let mut lines = 0;
-        let mut columns = 0;
         let mut chunk_first_byte = 0;
         let mut chunk_bytes = 0;
-        let mut prev_cr = false;
+        let mut walk_state = WalkState {
+            curr_line: 0,
+            curr_column: 0,
+            prev_cr: false,
+        };
+
         loop {
             let bytes_read = reader.read(&mut buf).expect("TODO");
             if bytes_read == 0 {
@@ -80,42 +90,26 @@ impl<T: Read + Seek> BigFileEditor<T> {
                 // If c == \n, then we *don't* push, because we want that character inside the
                 // chunk (it will be pushed in the next iteration, as prev_cr will be false).
                 // If c != \n, then we can safely push.
-                if chunk_bytes >= CHUNK_SIZE && (!prev_cr || c != ASCII_LF) {
+                if chunk_bytes >= CHUNK_SIZE && (!walk_state.prev_cr || c != ASCII_LF) {
                     chunks.push(FileChunkIndex {
                         first_byte: chunk_first_byte,
                         bytes_len: chunk_bytes,
                         first_line,
                         first_line_offset: first_column,
-                        last_line: first_line + lines,
-                        last_line_length: columns,
+                        last_line: walk_state.curr_line,
+                        last_line_length: walk_state.curr_column - first_column,
                     });
 
                     chunk_first_byte += chunk_bytes;
                     chunk_bytes = 0;
 
-                    first_line += lines;
-                    first_column = columns;
-
-                    lines = 0;
+                    first_line = walk_state.curr_line;
+                    first_column = walk_state.curr_column;
                 }
 
-                if c == ASCII_CR {
-                    lines += 1;
-                    columns = 0;
-                } else if c == ASCII_LF {
-                    if !prev_cr {
-                        lines += 1;
-                        columns = 0;
-                    }
-                } else if c == ASCII_HT {
-                    columns += TAB_SIZE - (columns % TAB_SIZE);
-                } else if c <= 127 {
-                    columns += 1;
-                }
-                // TODO: handle UTF-8
+                Self::advance_char(c, &mut walk_state);
 
                 chunk_bytes += 1;
-                prev_cr = c == ASCII_CR;
             }
         }
 
@@ -125,8 +119,8 @@ impl<T: Read + Seek> BigFileEditor<T> {
                 bytes_len: chunk_bytes,
                 first_line,
                 first_line_offset: first_column,
-                last_line: first_line + lines,
-                last_line_length: columns,
+                last_line: walk_state.curr_line,
+                last_line_length: walk_state.curr_column - first_column,
             });
         }
 
@@ -136,14 +130,19 @@ impl<T: Read + Seek> BigFileEditor<T> {
     pub fn read_window(&mut self, frame: &FileWindowFrame) -> FileWindow {
         let mut lines = vec![];
 
+        let first_column = frame.first_column - (frame.first_column % TAB_SIZE);
+
         for l in frame.first_line..frame.first_line + frame.lines {
-            let line = self.read_line(l, frame.first_column, frame.columns);
+            let line = self.read_line(l, first_column, frame.columns);
             lines.push(line);
         }
 
         return FileWindow {
             lines,
-            frame: frame.clone(),
+            frame: FileWindowFrame {
+                first_column,
+                ..*frame
+            },
         };
     }
 
@@ -184,29 +183,34 @@ impl<T: Read + Seek> BigFileEditor<T> {
             buf_idx += 1;
         }
 
-        let mut curr_column = if l == first_chunk.first_line {
+        let curr_column = if l == first_chunk.first_line {
             first_chunk.first_line_offset
         } else {
             0
         };
-        while curr_column < first_column {
+
+        let mut walk_state = WalkState {
+            curr_line,
+            curr_column,
+            prev_cr: false,
+        };
+        while walk_state.curr_column < first_column {
             assert!(buf_idx < bytes_read);
 
             let c = buf[buf_idx];
-            if c == ASCII_LF {
-                // We reached EOL but we haven't even reached the first column.
+
+            Self::advance_char(c, &mut walk_state);
+
+            if walk_state.curr_line > l {
+                // We reached an EOL before reaching the first column of the line l.
                 // This simply means that this line does not reach the window.
                 // Therefore, we simply go to the next line.
                 return String::new();
-            } else if c == ASCII_HT {
-                // TODO: handle better
-                curr_column += TAB_SIZE;
-            } else if 32 <= c && c <= 127 {
-                curr_column += 1;
             }
 
             buf_idx += 1;
         }
+        assert_eq!(curr_column, first_column);
 
         // We found the byte for l at column window.first_column (stored in buf_idx).
         // Now we will read bytes until reaching (at least) window.columns chars.
@@ -275,6 +279,26 @@ impl<T: Read + Seek> BigFileEditor<T> {
                 }
             })
             .ok()
+    }
+
+    fn advance_char(c: u8, state: &mut WalkState) {
+        // TODO: handle UTF-8
+
+        if c == ASCII_CR {
+            state.curr_line += 1;
+            state.curr_column = 0;
+        } else if c == ASCII_LF {
+            if !state.prev_cr {
+                state.curr_line += 1;
+                state.curr_column = 0;
+            }
+        } else if c == ASCII_HT {
+            state.curr_column += TAB_SIZE - (state.curr_column % TAB_SIZE);
+        } else if c <= 127 {
+            state.curr_column += 1;
+        }
+
+        state.prev_cr = c == ASCII_CR;
     }
 }
 
