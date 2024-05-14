@@ -146,7 +146,10 @@ impl<T: Read + Seek> BigFileEditor<T> {
         };
     }
 
+    // first_column should be a multiple of TAB_SIZE
     fn read_line(&mut self, l: usize, first_column: usize, columns: usize) -> String {
+        assert_eq!(first_column % TAB_SIZE, 0);
+
         // Find the chunk in which l:window.first_column is.
         let Some(first_chunk_index) = self.find_chunk_by_coordinates(l, first_column) else {
             // The line does not exist or window.first_column is past the line's end.
@@ -171,64 +174,74 @@ impl<T: Read + Seek> BigFileEditor<T> {
 
         let mut buf_idx = 0;
 
-        let mut curr_line = first_chunk.first_line;
-        while curr_line != l {
-            assert!(buf_idx < bytes_read);
-
-            let c = buf[buf_idx];
-            if c == ASCII_LF {
-                curr_line += 1;
-            }
-
-            buf_idx += 1;
-        }
-
-        let curr_column = if l == first_chunk.first_line {
-            first_chunk.first_line_offset
-        } else {
-            0
-        };
-
         let mut walk_state = WalkState {
-            curr_line,
-            curr_column,
+            curr_line: first_chunk.first_line,
+            curr_column: first_chunk.first_line_offset,
             prev_cr: false,
         };
-        while walk_state.curr_column < first_column {
-            assert!(buf_idx < bytes_read);
+
+        while walk_state.curr_line < l
+            || (walk_state.curr_line == l && walk_state.curr_column < first_column)
+        {
+            if buf_idx == bytes_read {
+                // We ran out of bytes without reaching (l, first_column).
+                break;
+            }
 
             let c = buf[buf_idx];
 
             Self::advance_char(c, &mut walk_state);
 
-            if walk_state.curr_line > l {
-                // We reached an EOL before reaching the first column of the line l.
-                // This simply means that this line does not reach the window.
-                // Therefore, we simply go to the next line.
-                return String::new();
-            }
-
             buf_idx += 1;
         }
-        assert_eq!(curr_column, first_column);
 
-        // We found the byte for l at column window.first_column (stored in buf_idx).
-        // Now we will read bytes until reaching (at least) window.columns chars.
+        if walk_state.curr_line < l {
+            // We didn't reach line l in this chunk, which means that either
+            // the file changed or that this line is past the EOF.
+            return String::new();
+        }
+
+        if walk_state.curr_line > l {
+            // We skipped past line l before reaching the first column of the line l.
+            // This simply means that line l does not reach the window.
+            // Therefore, we simply go to the next line.
+            return String::new();
+        }
+
+        if walk_state.curr_column < first_column {
+            // We didn't reach first_column column of the line l.
+            return String::new();
+        }
+
+        // Because first_column is tab aligned, (at this point) this should always be true.
+        assert_eq!(walk_state.curr_column, first_column);
+
+        // Make sure to not include the \n of a \r\n of the previous line
+        if walk_state.prev_cr && buf_idx < bytes_read && buf[buf_idx] == ASCII_LF {
+            buf_idx += 1;
+        }
+
+        // We found the byte for coord (l, first_column) (stored in buf_idx).
+        // Now we will read bytes until reaching (at least) `columns` chars.
         let mut line = String::new();
-        let mut columns_read = 0;
+        let last_column = first_column + columns;
         let mut chunk_index = first_chunk_index;
         loop {
-            while buf_idx < bytes_read && columns_read < columns {
+            while buf_idx < bytes_read && walk_state.curr_column < last_column {
                 let c = buf[buf_idx];
-                if c == ASCII_LF {
-                    columns_read = columns;
+
+                if walk_state.curr_line > l {
+                    if c == ASCII_LF && walk_state.prev_cr {
+                        line.push(ASCII_LF as char);
+                    }
                     break;
-                } else if c == ASCII_HT {
-                    columns_read += TAB_SIZE;
-                } else if 32 <= c && c <= 127 {
-                    columns_read += 1;
                 }
+
+                // We push before checking as we do want the EOL to be part of the line.
                 line.push(c as char);
+
+                Self::advance_char(c, &mut walk_state);
+
                 buf_idx += 1;
             }
 
@@ -237,7 +250,7 @@ impl<T: Read + Seek> BigFileEditor<T> {
             // If we read all the requested columns,
             // or if we reached EOF (indicated by having no further chunks),
             // then break and return what we have read.
-            if columns_read >= columns || chunk_index >= self.chunks.len() {
+            if walk_state.curr_column >= last_column || chunk_index >= self.chunks.len() {
                 break;
             }
 
