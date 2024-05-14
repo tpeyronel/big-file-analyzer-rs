@@ -665,4 +665,119 @@ mod reading_tests {
             assert_eq!(window.lines[0], expected_line.to_string());
         }
     }
+
+    fn test_complex_generic(
+        file: &str,
+        (first_line, first_column): (usize, usize),
+        (lines, columns): (usize, usize),
+        expected_lines: &[&str],
+    ) {
+        assert_eq!(lines, expected_lines.len());
+
+        let mut editor = BigFileEditor::from_str(file);
+
+        let frame = FileWindowFrame {
+            first_line,
+            first_column,
+            lines,
+            columns,
+        };
+
+        let window = editor.read_window(&frame);
+        assert_eq!(
+            window.frame,
+            FileWindowFrame {
+                first_column: frame.first_column - (frame.first_column % TAB_SIZE),
+                ..frame
+            }
+        );
+        assert_eq!(window.lines.len(), lines);
+        for (line, expected_line) in window.lines.iter().zip(expected_lines.iter()) {
+            assert_eq!(line, expected_line);
+        }
+    }
+
+    #[test]
+    fn read_complex() {
+        test_complex((0, 0), (4, 1), &["\n", "a", "b", "c"]);
+        test_complex((0, 0), (4, 2), &["\n", "a\n", "bb", "cc"]);
+        test_complex((0, 0), (4, 4), &["\n", "a\n", "bb\n", "cccc"]);
+        test_complex((2, 0), (4, 4), &["bb\n", "cccc", "dddd", "eeee"]);
+        test_complex(
+            (2, 2),
+            (4, 8),
+            &["bb\n", "cccc\n", "dddddddd\n", "eeeeeeeeee"],
+        );
+        test_complex((6, 0), (4, 4), &["ffff", "gggg", "", ""]);
+        test_complex((6, 64), (4, 4), &["", "\n", "", ""]);
+
+        fn test_complex(
+            (first_line, first_column): (usize, usize),
+            (lines, columns): (usize, usize),
+            expected_lines: &[&str],
+        ) {
+            let file = concat!(
+                "\n",
+                "a\n",
+                "bb\n",
+                "cccc\n",
+                "dddddddd\n",
+                "eeeeeeeeeeeeeeee\n",
+                "ffffffffffffffffffffffffffffffff\n",
+                "gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg\n",
+            );
+
+            test_complex_generic(
+                file,
+                (first_line, first_column),
+                (lines, columns),
+                expected_lines,
+            );
+        }
+    }
+
+    #[test]
+    fn read_complex_crlf() {
+        test_complex((0, 0), (4, 1), &["\r\n", "a", "b", "c"]);
+        test_complex((0, 0), (4, 2), &["\r\n", "a\r\n", "bb", "cc"]);
+        test_complex((0, 0), (4, 4), &["\r\n", "a\r\n", "bb\r\n", "cccc"]);
+        test_complex((2, 0), (4, 4), &["bb\r\n", "cccc", "dddd", "eeee"]);
+        test_complex(
+            (2, 2),
+            (4, 8),
+            &["bb\r\n", "cccc\r\n", "dddddddd\r\n", "eeeeeeeeee"],
+        );
+        test_complex(
+            (2, 7),
+            (4, 8),
+            &["bb\r\n", "cccc\r\n", "dddddddd\r\n", "eeeeeeeeeeeeeee"],
+        );
+        test_complex((2, 8), (4, 8), &["", "", "\r\n", "eeeeeeee"]);
+        test_complex((6, 0), (4, 4), &["ffff", "gggg", "", ""]);
+        test_complex((6, 64), (4, 4), &["", "\r\n", "", ""]);
+
+        fn test_complex(
+            (first_line, first_column): (usize, usize),
+            (lines, columns): (usize, usize),
+            expected_lines: &[&str],
+        ) {
+            let file = concat!(
+                "\r\n",
+                "a\r\n",
+                "bb\r\n",
+                "cccc\r\n",
+                "dddddddd\r\n",
+                "eeeeeeeeeeeeeeee\r\n",
+                "ffffffffffffffffffffffffffffffff\r\n",
+                "gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg\r\n",
+            );
+
+            test_complex_generic(
+                file,
+                (first_line, first_column),
+                (lines, columns),
+                expected_lines,
+            );
+        }
+    }
 }
