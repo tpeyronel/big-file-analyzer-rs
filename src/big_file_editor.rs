@@ -7,7 +7,7 @@ use std::{
 
 use crate::file::ReadRetry;
 
-const TAB_SIZE: usize = 8;
+pub const TAB_SIZE: usize = 8;
 
 const ASCII_HT: u8 = 9;
 const ASCII_LF: u8 = 10;

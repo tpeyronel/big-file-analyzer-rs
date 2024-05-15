@@ -5,7 +5,7 @@ use std::{
 
 use crossterm::event::{Event, KeyCode, KeyEventKind};
 
-use crate::big_file_editor::{BigFileEditor, FileWindowFrame};
+use crate::big_file_editor::{BigFileEditor, FileWindowFrame, TAB_SIZE};
 
 mod big_file_editor;
 mod file;
@@ -66,11 +66,31 @@ fn run() -> io::Result<()> {
 
 fn read_and_print_window<T: Read + Seek>(editor: &mut BigFileEditor<T>, frame: &FileWindowFrame) {
     let window = editor.read_window(&frame);
+    let offset = frame.first_column - window.frame.first_column;
 
     let mut output = String::new();
+    output += "\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n";
     output += "--------------------------------------------------------------------------------\n";
     for line in &window.lines {
-        output += &format!("{}\n", line.replace("\n", "").replace("\r", ""));
+        let line = line.replace("\n", "").replace("\r", "");
+        let mut line_without_tabs = String::new();
+        let mut column = window.frame.first_column;
+        for c in line.chars() {
+            if c == '\t' {
+                let tabs = TAB_SIZE - (column % TAB_SIZE);
+                line_without_tabs += &" ".repeat(tabs);
+                column += TAB_SIZE - (column % TAB_SIZE);
+            } else {
+                line_without_tabs.push(c);
+                column += 1;
+                continue;
+            }
+        }
+        if line_without_tabs.len() > offset {
+            output += &format!("{}\n", &line_without_tabs[offset..]);
+        } else {
+            output += &format!("\n");
+        }
     }
     output += "--------------------------------------------------------------------------------\n";
     print!("{}", output);
