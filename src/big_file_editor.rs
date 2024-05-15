@@ -320,10 +320,6 @@ impl BigFileEditor<Cursor<String>> {
     }
 }
 
-// TODO: we probably don't need to store last_line and last_line_length
-// This is because we could perform binary search based on just first_line
-// and first_line_offset, and (most of the time), we would get returned
-// Err(idx), where idx is actually correct.
 #[derive(Debug, PartialEq, Eq)]
 struct FileChunkIndex {
     // The first byte of this chunk (relative to the beginning of the file).
