@@ -334,232 +334,6 @@ struct FileChunkIndex {
     first_line_offset: usize,
 }
 
-// #[cfg(test)]
-// mod indexing_tests {
-//     use super::*;
-
-//     fn single_chunk_test(s: &str, expected: FileChunkIndex) {
-//         let editor = BigFileEditor::from_str(s);
-//         assert!(editor.chunks.len() == 1);
-//         let chunk = editor.chunks.first().unwrap();
-//         assert_eq!(*chunk, expected);
-//     }
-
-//     #[test]
-//     fn empty_file() {
-//         let editor = BigFileEditor::from_str("");
-
-//         assert!(editor.chunks.is_empty());
-//     }
-
-//     #[test]
-//     fn one_char() {
-//         single_chunk_test(
-//             "a",
-//             FileChunkIndex {
-//                 first_byte: 0,
-//                 bytes_len: 1,
-//                 first_line: 0,
-//                 first_line_offset: 0,
-//                 last_line: 0,
-//                 last_line_length: 1,
-//             },
-//         );
-//     }
-
-//     #[test]
-//     fn two_chars() {
-//         single_chunk_test(
-//             "aa",
-//             FileChunkIndex {
-//                 first_byte: 0,
-//                 bytes_len: 2,
-//                 first_line: 0,
-//                 first_line_offset: 0,
-//                 last_line: 0,
-//                 last_line_length: 2,
-//             },
-//         );
-//     }
-
-//     #[test]
-//     fn aligned_tab() {
-//         single_chunk_test(
-//             "\taa",
-//             FileChunkIndex {
-//                 first_byte: 0,
-//                 bytes_len: 3,
-//                 first_line: 0,
-//                 first_line_offset: 0,
-//                 last_line: 0,
-//                 last_line_length: TAB_SIZE + 2,
-//             },
-//         );
-//     }
-
-//     #[test]
-//     fn non_aligned_tab() {
-//         single_chunk_test(
-//             "aa\taa",
-//             FileChunkIndex {
-//                 first_byte: 0,
-//                 bytes_len: 5,
-//                 first_line: 0,
-//                 first_line_offset: 0,
-//                 last_line: 0,
-//                 last_line_length: TAB_SIZE + 2,
-//             },
-//         );
-//     }
-
-//     #[test]
-//     fn far_aligned_tab() {
-//         single_chunk_test(
-//             "aaaabbbbccccdddd\taa",
-//             FileChunkIndex {
-//                 first_byte: 0,
-//                 bytes_len: 16 + 1 + 2,
-//                 first_line: 0,
-//                 first_line_offset: 0,
-//                 last_line: 0,
-//                 last_line_length: 16 + TAB_SIZE + 2,
-//             },
-//         );
-//     }
-
-//     #[test]
-//     fn far_non_aligned_tab() {
-//         single_chunk_test(
-//             "aaaabbbbccccddddaa\taa",
-//             FileChunkIndex {
-//                 first_byte: 0,
-//                 bytes_len: 16 + 2 + 1 + 2,
-//                 first_line: 0,
-//                 first_line_offset: 0,
-//                 last_line: 0,
-//                 last_line_length: 16 + TAB_SIZE + 2,
-//             },
-//         );
-//         single_chunk_test(
-//             "aaaabbbbccccddddaaaabb\taa",
-//             FileChunkIndex {
-//                 first_byte: 0,
-//                 bytes_len: 16 + 6 + 1 + 2,
-//                 first_line: 0,
-//                 first_line_offset: 0,
-//                 last_line: 0,
-//                 last_line_length: 16 + TAB_SIZE + 2,
-//             },
-//         );
-//     }
-
-//     #[test]
-//     fn control_chars() {
-//         single_chunk_test(
-//             // Special characters are \x09 (\t), \x0A (\n), and \x0D (\r)
-//             // Both the \x0A and the \x0D should be treated as a new line.
-//             "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0A\x0B\x0C\x0D\x0E\x0F",
-//             FileChunkIndex {
-//                 first_byte: 0,
-//                 bytes_len: 16,
-//                 first_line: 0,
-//                 first_line_offset: 0,
-//                 last_line: 2,
-//                 last_line_length: 2,
-//             },
-//         );
-//         single_chunk_test(
-//             // All of these characters are considered garbage,
-//             "\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1A\x1B\x1C\x1D\x1E\x1F",
-//             FileChunkIndex {
-//                 first_byte: 0,
-//                 bytes_len: 16,
-//                 first_line: 0,
-//                 first_line_offset: 0,
-//                 last_line: 0,
-//                 last_line_length: 16,
-//             },
-//         );
-//     }
-
-//     #[test]
-//     fn control_chars_of_width_1() {
-//         single_chunk_test(
-//             // Every control char except \t, \r, and \n.
-//             // Therefore, we have 29 control chars, all of width 1.
-//             "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x0B\x0C\x0E\x0F\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1A\x1B\x1C\x1D\x1E\x1F",
-//             FileChunkIndex {
-//                 first_byte: 0,
-//                 bytes_len: 29,
-//                 first_line: 0,
-//                 first_line_offset: 0,
-//                 last_line: 0,
-//                 last_line_length: 29,
-//             },
-//         );
-//     }
-
-//     #[test]
-//     fn newlines_lf() {
-//         single_chunk_test(
-//             "\n\n\n\n",
-//             FileChunkIndex {
-//                 first_byte: 0,
-//                 bytes_len: 4,
-//                 first_line: 0,
-//                 first_line_offset: 0,
-//                 last_line: 4,
-//                 last_line_length: 0,
-//             },
-//         );
-//     }
-
-//     #[test]
-//     fn newlines_crlf() {
-//         single_chunk_test(
-//             "\r\n\r\n\r\n\r\n",
-//             FileChunkIndex {
-//                 first_byte: 0,
-//                 bytes_len: 8,
-//                 first_line: 0,
-//                 first_line_offset: 0,
-//                 last_line: 4,
-//                 last_line_length: 0,
-//             },
-//         );
-//     }
-
-//     #[test]
-//     fn newlines_cr() {
-//         single_chunk_test(
-//             "\r\r\r\r",
-//             FileChunkIndex {
-//                 first_byte: 0,
-//                 bytes_len: 4,
-//                 first_line: 0,
-//                 first_line_offset: 0,
-//                 last_line: 4,
-//                 last_line_length: 0,
-//             },
-//         );
-//     }
-
-//     #[test]
-//     fn newlines_all_mixed() {
-//         single_chunk_test(
-//             "\n\r\n\r\r\n\n",
-//             FileChunkIndex {
-//                 first_byte: 0,
-//                 bytes_len: 7,
-//                 first_line: 0,
-//                 first_line_offset: 0,
-//                 last_line: 5,
-//                 last_line_length: 0,
-//             },
-//         );
-//     }
-// }
-
 #[cfg(test)]
 mod reading_tests {
     use super::*;
@@ -683,6 +457,305 @@ mod reading_tests {
         assert_eq!(window.lines.len(), lines);
         for (line, expected_line) in window.lines.iter().zip(expected_lines.iter()) {
             assert_eq!(line, expected_line);
+        }
+    }
+
+    #[test]
+    fn aligned_tabs() {
+        test_complex((0, 0), (4, 1), &["\t", "\t", "\t", "\t"]);
+        test_complex((0, 0), (4, 2), &["\t", "\t", "\t", "\t"]);
+        test_complex((0, 0), (4, 8), &["\t", "\t", "\t", "\t"]);
+        test_complex((0, 0), (4, 9), &["\t\n", "\ta", "\tb", "\tc"]);
+        test_complex((0, 1), (4, 9), &["\t\n", "\ta\n", "\tbb", "\tcc"]);
+
+        fn test_complex(
+            (first_line, first_column): (usize, usize),
+            (lines, columns): (usize, usize),
+            expected_lines: &[&str],
+        ) {
+            let file = concat!(
+                "\t\n",
+                "\ta\n",
+                "\tbb\n",
+                "\tcccc\n",
+                "\tdddddddd\n",
+                "\teeeeeeeeeeeeeeee\n",
+                "\tffffffffffffffffffffffffffffffff\n",
+                "\tgggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg\n",
+            );
+
+            test_complex_generic(
+                file,
+                (first_line, first_column),
+                (lines, columns),
+                expected_lines,
+            );
+        }
+    }
+
+    #[test]
+    fn non_aligned_tabs() {
+        test_complex((0, 0), (4, 1), &["\t", "a", "b", "c"]);
+        test_complex((0, 0), (4, 2), &["\t", "a\t", "bb", "cc"]);
+        test_complex((0, 0), (4, 8), &["\t", "a\t", "bb\t", "ccc\t"]);
+        test_complex((0, 0), (4, 9), &["\t\n", "a\t\n", "bb\t\n", "ccc\tc"]);
+        test_complex((0, 1), (4, 9), &["\t\n", "a\t\n", "bb\t\n", "ccc\tc\n"]);
+        test_complex(
+            (4, 0),
+            (4, 8),
+            &["dddd\t", "eeeee\t", "ffffff\t", "ggggggg\t"],
+        );
+        test_complex(
+            (4, 0),
+            (4, 9),
+            &["dddd\td", "eeeee\te", "ffffff\tf", "ggggggg\tg"],
+        );
+
+        fn test_complex(
+            (first_line, first_column): (usize, usize),
+            (lines, columns): (usize, usize),
+            expected_lines: &[&str],
+        ) {
+            let file = concat!(
+                "\t\n",
+                "a\t\n",
+                "bb\t\n",
+                "ccc\tc\n",
+                "dddd\tdddd\n",
+                "eeeee\teeeeeeeeeee\n",
+                "ffffff\tffffffffffffffffffffffffff\n",
+                "ggggggg\tggggggggggggggggggggggggggggggggggggggggggggggggggggggggg\n",
+            );
+
+            test_complex_generic(
+                file,
+                (first_line, first_column),
+                (lines, columns),
+                expected_lines,
+            );
+        }
+    }
+
+    #[test]
+    fn far_aligned_tabs() {
+        test_complex((4, 10), (4, 8), &["\n", "\tee", "\tff", "\tgg"]);
+
+        fn test_complex(
+            (first_line, first_column): (usize, usize),
+            (lines, columns): (usize, usize),
+            expected_lines: &[&str],
+        ) {
+            let file = concat!(
+                "\n",
+                "a\n",
+                "bb\n",
+                "cccc\n",
+                "dddddddd\n",
+                "eeeeeeee\teeeeeeee\n",
+                "ffffffff\tffffffffffffffffffffffff\n",
+                "gggggggg\tgggggggggggggggggggggggggggggggggggggggggggggggggggggggg\n",
+            );
+
+            test_complex_generic(
+                file,
+                (first_line, first_column),
+                (lines, columns),
+                expected_lines,
+            );
+        }
+    }
+
+    #[test]
+    fn far_non_aligned_tabs() {
+        test_complex((4, 10), (4, 8), &["\n", "eeee\tee", "fff\tff", "gg\tgg"]);
+
+        fn test_complex(
+            (first_line, first_column): (usize, usize),
+            (lines, columns): (usize, usize),
+            expected_lines: &[&str],
+        ) {
+            let file = concat!(
+                "\n",
+                "a\n",
+                "bb\n",
+                "cccc\n",
+                "dddddddd\n",
+                "eeeeeeeeeeee\teeee\n",
+                "fffffffffff\tfffffffffffffffffffff\n",
+                "gggggggggg\tgggggggggggggggggggggggggggggggggggggggggggggggggggggg\n",
+            );
+
+            test_complex_generic(
+                file,
+                (first_line, first_column),
+                (lines, columns),
+                expected_lines,
+            );
+        }
+    }
+
+    #[test]
+    fn control_chars() {
+        test_complex(
+            (0, 0),
+            (1, 10),
+            &["\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09"],
+        );
+        test_complex(
+            (0, 0),
+            (1, 16),
+            &["\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09"],
+        );
+        test_complex(
+            (0, 0),
+            (1, 17),
+            &["\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0A"],
+        );
+        test_complex(
+            (0, 0),
+            (1, 18),
+            &["\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0A"],
+        );
+        test_complex((1, 0), (1, 2), &["\x0B\x0C"]);
+        test_complex((1, 0), (1, 3), &["\x0B\x0C\x0D"]);
+        test_complex((1, 0), (1, 4), &["\x0B\x0C\x0D"]);
+        test_complex(
+            (2, 0),
+            (1, 17),
+            &["\x0E\x0F\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1A\x1B\x1C\x1D\x1E"],
+        );
+        test_complex(
+            (2, 0),
+            (1, 18),
+            &["\x0E\x0F\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1A\x1B\x1C\x1D\x1E\x1F"],
+        );
+        test_complex(
+            (2, 0),
+            (1, 19),
+            &["\x0E\x0F\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1A\x1B\x1C\x1D\x1E\x1F"],
+        );
+
+        fn test_complex(
+            (first_line, first_column): (usize, usize),
+            (lines, columns): (usize, usize),
+            expected_lines: &[&str],
+        ) {
+            let file = concat!(
+                // Special characters are \x09 (\t), \x0A (\n), and \x0D (\r)
+                // Both the \x0A and the \x0D should be treated as a new line.
+                // The rest of the characters are garbage and have a width of 1.
+                "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0A",
+                "\x0B\x0C\x0D",
+                "\x0E\x0F\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1A\x1B\x1C\x1D\x1E\x1F",
+            );
+
+            test_complex_generic(
+                file,
+                (first_line, first_column),
+                (lines, columns),
+                expected_lines,
+            );
+        }
+    }
+
+    #[test]
+    fn newlines_lf() {
+        test_complex((0, 0), (1, 1), &["\n"]);
+        test_complex((0, 0), (1, 2), &["\n"]);
+        test_complex((0, 0), (2, 1), &["\n", "\n"]);
+        test_complex((0, 0), (2, 2), &["\n", "\n"]);
+        test_complex((2, 0), (2, 42), &["\n", "\n"]);
+        test_complex((0, 0), (4, 42), &["\n", "\n", "\n", "\n"]);
+
+        fn test_complex(
+            (first_line, first_column): (usize, usize),
+            (lines, columns): (usize, usize),
+            expected_lines: &[&str],
+        ) {
+            let file = concat!("\n", "\n", "\n", "\n",);
+
+            test_complex_generic(
+                file,
+                (first_line, first_column),
+                (lines, columns),
+                expected_lines,
+            );
+        }
+    }
+
+    #[test]
+    fn newlines_crlf() {
+        test_complex((0, 0), (1, 1), &["\r\n"]);
+        test_complex((0, 0), (1, 2), &["\r\n"]);
+        test_complex((0, 0), (2, 1), &["\r\n", "\r\n"]);
+        test_complex((0, 0), (2, 2), &["\r\n", "\r\n"]);
+        test_complex((2, 0), (2, 42), &["\r\n", "\r\n"]);
+        test_complex((0, 0), (4, 42), &["\r\n", "\r\n", "\r\n", "\r\n"]);
+
+        fn test_complex(
+            (first_line, first_column): (usize, usize),
+            (lines, columns): (usize, usize),
+            expected_lines: &[&str],
+        ) {
+            let file = concat!("\r\n", "\r\n", "\r\n", "\r\n",);
+
+            test_complex_generic(
+                file,
+                (first_line, first_column),
+                (lines, columns),
+                expected_lines,
+            );
+        }
+    }
+
+    #[test]
+    fn newlines_cr() {
+        test_complex((0, 0), (1, 1), &["\r"]);
+        test_complex((0, 0), (1, 2), &["\r"]);
+        test_complex((0, 0), (2, 1), &["\r", "\r"]);
+        test_complex((0, 0), (2, 2), &["\r", "\r"]);
+        test_complex((2, 0), (2, 42), &["\r", "\r"]);
+        test_complex((0, 0), (4, 42), &["\r", "\r", "\r", "\r"]);
+
+        fn test_complex(
+            (first_line, first_column): (usize, usize),
+            (lines, columns): (usize, usize),
+            expected_lines: &[&str],
+        ) {
+            let file = concat!("\r", "\r", "\r", "\r",);
+
+            test_complex_generic(
+                file,
+                (first_line, first_column),
+                (lines, columns),
+                expected_lines,
+            );
+        }
+    }
+
+    #[test]
+    fn newlines_all_mixed() {
+        test_complex((0, 0), (1, 1), &["\n"]);
+        test_complex((0, 0), (1, 2), &["\n"]);
+        test_complex((0, 0), (2, 1), &["\n", "\r\n"]);
+        test_complex((0, 0), (2, 2), &["\n", "\r\n"]);
+        test_complex((2, 0), (2, 42), &["\r", "\r\n"]);
+        test_complex((0, 0), (4, 42), &["\n", "\r\n", "\r", "\r\n"]);
+        test_complex((0, 0), (5, 42), &["\n", "\r\n", "\r", "\r\n", "\n"]);
+
+        fn test_complex(
+            (first_line, first_column): (usize, usize),
+            (lines, columns): (usize, usize),
+            expected_lines: &[&str],
+        ) {
+            let file = concat!("\n", "\r\n", "\r", "\r\n", "\n");
+
+            test_complex_generic(
+                file,
+                (first_line, first_column),
+                (lines, columns),
+                expected_lines,
+            );
         }
     }
 
