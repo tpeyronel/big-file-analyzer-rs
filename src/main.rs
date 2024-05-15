@@ -1,9 +1,14 @@
 use std::{
-    io::{self, Read, Seek},
+    io::{self, Read, Seek, Write},
     time::Instant,
 };
 
-use crossterm::event::{Event, KeyCode, KeyEventKind};
+use crossterm::{
+    cursor,
+    event::{Event, KeyCode, KeyEventKind},
+    queue, style,
+    terminal::{self, ClearType},
+};
 
 use crate::big_file_editor::{BigFileEditor, FileWindowFrame, TAB_SIZE};
 
@@ -29,18 +34,20 @@ fn run() -> io::Result<()> {
     let mut frame = FileWindowFrame {
         first_line: 0,
         first_column: 0,
-        lines: 12,
+        lines: crossterm::terminal::size()?.1.saturating_sub(2) as usize,
         columns: 80,
     };
 
-    read_and_print_window(&mut editor, &frame);
+    let mut stdout = std::io::stdout();
+
+    read_and_print_window(&mut stdout, &mut editor, &frame)?;
 
     loop {
         let event = crossterm::event::read()?;
         match event {
             Event::Key(e) if e.kind == KeyEventKind::Press => {
                 match e.code {
-                    KeyCode::Esc => break,
+                    KeyCode::Esc | KeyCode::Char('q') => break,
                     KeyCode::Left => {
                         frame.first_column = frame.first_column.saturating_sub(1);
                     },
@@ -56,7 +63,11 @@ fn run() -> io::Result<()> {
                     _ => continue,
                 };
 
-                read_and_print_window(&mut editor, &frame);
+                read_and_print_window(&mut stdout, &mut editor, &frame)?;
+            },
+            Event::Resize(_width, height) => {
+                frame.lines = height.saturating_sub(2) as usize;
+                read_and_print_window(&mut stdout, &mut editor, &frame)?;
             },
             _ => {},
         }
@@ -64,12 +75,23 @@ fn run() -> io::Result<()> {
     Ok(())
 }
 
-fn read_and_print_window<T: Read + Seek>(editor: &mut BigFileEditor<T>, frame: &FileWindowFrame) {
+fn read_and_print_window<T: Read + Seek>(
+    stdout: &mut io::Stdout,
+    editor: &mut BigFileEditor<T>,
+    frame: &FileWindowFrame,
+) -> io::Result<()> {
+    queue!(
+        stdout,
+        style::ResetColor,
+        terminal::Clear(ClearType::All),
+        cursor::Hide,
+        cursor::MoveTo(1, 1)
+    )?;
+
     let window = editor.read_window(&frame);
     let offset = frame.first_column - window.frame.first_column;
 
     let mut output = String::new();
-    output += "\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n";
     output += "--------------------------------------------------------------------------------\n";
     for line in &window.lines {
         let line = line.replace("\n", "").replace("\r", "");
@@ -92,6 +114,9 @@ fn read_and_print_window<T: Read + Seek>(editor: &mut BigFileEditor<T>, frame: &
             output += &format!("\n");
         }
     }
-    output += "--------------------------------------------------------------------------------\n";
+    output += "--------------------------------------------------------------------------------";
     print!("{}", output);
+    stdout.flush()?;
+
+    Ok(())
 }
