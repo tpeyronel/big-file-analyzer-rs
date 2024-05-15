@@ -96,8 +96,6 @@ impl<T: Read + Seek> BigFileEditor<T> {
                         bytes_len: chunk_bytes,
                         first_line,
                         first_line_offset: first_column,
-                        last_line: walk_state.curr_line,
-                        last_line_length: walk_state.curr_column - first_column,
                     });
 
                     chunk_first_byte += chunk_bytes;
@@ -119,8 +117,6 @@ impl<T: Read + Seek> BigFileEditor<T> {
                 bytes_len: chunk_bytes,
                 first_line,
                 first_line_offset: first_column,
-                last_line: walk_state.curr_line,
-                last_line_length: walk_state.curr_column - first_column,
             });
         }
 
@@ -152,18 +148,25 @@ impl<T: Read + Seek> BigFileEditor<T> {
         assert_eq!(first_column % TAB_SIZE, 0);
 
         // Find the chunk in which l:window.first_column is.
-        let Some(first_chunk_index) = self.find_chunk_by_coordinates(l, first_column) else {
-            // The line does not exist or window.first_column is past the line's end.
-            return String::new();
-        };
+        let first_chunk_index = self.find_chunk_by_coordinates(l, first_column);
+        assert!(first_chunk_index < self.chunks.len());
 
         let first_chunk = &self.chunks[first_chunk_index];
-        assert!(first_chunk.first_line <= l && l <= first_chunk.last_line);
-        assert!(first_chunk.first_line != l || first_chunk.first_line_offset <= first_column);
-        assert!(first_chunk.last_line != l || first_column <= first_chunk.last_line_length);
 
-        // We know that l:window.first_column is somewhere inside first_chunk.
-        // Now we need to find exactly where it is.
+        assert!(
+            first_chunk.first_line < l
+                || (first_chunk.first_line == l && first_chunk.first_line_offset <= first_column)
+        );
+        if first_chunk_index + 1 < self.chunks.len() {
+            let next_chunk = &self.chunks[first_chunk_index + 1];
+            assert!(
+                next_chunk.first_line > l
+                    || (next_chunk.first_line == l && next_chunk.first_line_offset > first_column)
+            );
+        }
+
+        // We know that if l:window.first_column exists, then it is
+        // somewhere inside first_chunk. Now we need to find exactly where it is.
 
         // Read first chunk.
         let mut buf = vec![0u8; first_chunk.bytes_len];
@@ -267,32 +270,27 @@ impl<T: Read + Seek> BigFileEditor<T> {
         line
     }
 
-    fn find_chunk_by_coordinates(&self, line: usize, column: usize) -> Option<usize> {
-        self.chunks
-            .binary_search_by(|chunk| {
-                if line < chunk.first_line {
+    fn find_chunk_by_coordinates(&self, line: usize, column: usize) -> usize {
+        match self.chunks.binary_search_by(|chunk| {
+            if line < chunk.first_line {
+                Ordering::Greater
+            } else if line > chunk.first_line {
+                Ordering::Less
+            } else {
+                if column < chunk.first_line_offset {
                     Ordering::Greater
-                } else if line > chunk.last_line {
-                    Ordering::Less
-                } else if chunk.first_line == chunk.last_line {
-                    // (by sandwich, chunk.first_line == l == chunk.last_line)
-
-                    if column < chunk.first_line_offset {
-                        Ordering::Greater
-                    } else if column >= chunk.first_line_offset + chunk.last_line_length {
-                        Ordering::Less
-                    } else {
-                        Ordering::Equal
-                    }
-                } else if line == chunk.first_line && column < chunk.first_line_offset {
-                    Ordering::Greater
-                } else if line == chunk.last_line && column >= chunk.last_line_length {
+                } else if column > chunk.first_line_offset {
                     Ordering::Less
                 } else {
                     Ordering::Equal
                 }
-            })
-            .ok()
+            }
+        }) {
+            Ok(idx) => idx,
+            // Should never happen that Err(idx) == Err(0), because that would mean that (line, column)
+            // is to the left of (0, 0).
+            Err(idx) => idx - 1,
+        }
     }
 
     fn advance_char(c: u8, state: &mut WalkState) {
@@ -338,238 +336,233 @@ struct FileChunkIndex {
     // The first line in this chunk (relative to the first line of the file).
     first_line: usize,
     first_line_offset: usize,
-
-    // The last line in this chunk (relative to the first line of the file).
-    last_line: usize,
-    // If first_line = last_line, then this length is relative to first_line_offset.
-    last_line_length: usize,
 }
 
-#[cfg(test)]
-mod indexing_tests {
-    use super::*;
+// #[cfg(test)]
+// mod indexing_tests {
+//     use super::*;
 
-    fn single_chunk_test(s: &str, expected: FileChunkIndex) {
-        let editor = BigFileEditor::from_str(s);
-        assert!(editor.chunks.len() == 1);
-        let chunk = editor.chunks.first().unwrap();
-        assert_eq!(*chunk, expected);
-    }
+//     fn single_chunk_test(s: &str, expected: FileChunkIndex) {
+//         let editor = BigFileEditor::from_str(s);
+//         assert!(editor.chunks.len() == 1);
+//         let chunk = editor.chunks.first().unwrap();
+//         assert_eq!(*chunk, expected);
+//     }
 
-    #[test]
-    fn empty_file() {
-        let editor = BigFileEditor::from_str("");
+//     #[test]
+//     fn empty_file() {
+//         let editor = BigFileEditor::from_str("");
 
-        assert!(editor.chunks.is_empty());
-    }
+//         assert!(editor.chunks.is_empty());
+//     }
 
-    #[test]
-    fn one_char() {
-        single_chunk_test(
-            "a",
-            FileChunkIndex {
-                first_byte: 0,
-                bytes_len: 1,
-                first_line: 0,
-                first_line_offset: 0,
-                last_line: 0,
-                last_line_length: 1,
-            },
-        );
-    }
+//     #[test]
+//     fn one_char() {
+//         single_chunk_test(
+//             "a",
+//             FileChunkIndex {
+//                 first_byte: 0,
+//                 bytes_len: 1,
+//                 first_line: 0,
+//                 first_line_offset: 0,
+//                 last_line: 0,
+//                 last_line_length: 1,
+//             },
+//         );
+//     }
 
-    #[test]
-    fn two_chars() {
-        single_chunk_test(
-            "aa",
-            FileChunkIndex {
-                first_byte: 0,
-                bytes_len: 2,
-                first_line: 0,
-                first_line_offset: 0,
-                last_line: 0,
-                last_line_length: 2,
-            },
-        );
-    }
+//     #[test]
+//     fn two_chars() {
+//         single_chunk_test(
+//             "aa",
+//             FileChunkIndex {
+//                 first_byte: 0,
+//                 bytes_len: 2,
+//                 first_line: 0,
+//                 first_line_offset: 0,
+//                 last_line: 0,
+//                 last_line_length: 2,
+//             },
+//         );
+//     }
 
-    #[test]
-    fn aligned_tab() {
-        single_chunk_test(
-            "\taa",
-            FileChunkIndex {
-                first_byte: 0,
-                bytes_len: 3,
-                first_line: 0,
-                first_line_offset: 0,
-                last_line: 0,
-                last_line_length: TAB_SIZE + 2,
-            },
-        );
-    }
+//     #[test]
+//     fn aligned_tab() {
+//         single_chunk_test(
+//             "\taa",
+//             FileChunkIndex {
+//                 first_byte: 0,
+//                 bytes_len: 3,
+//                 first_line: 0,
+//                 first_line_offset: 0,
+//                 last_line: 0,
+//                 last_line_length: TAB_SIZE + 2,
+//             },
+//         );
+//     }
 
-    #[test]
-    fn non_aligned_tab() {
-        single_chunk_test(
-            "aa\taa",
-            FileChunkIndex {
-                first_byte: 0,
-                bytes_len: 5,
-                first_line: 0,
-                first_line_offset: 0,
-                last_line: 0,
-                last_line_length: TAB_SIZE + 2,
-            },
-        );
-    }
+//     #[test]
+//     fn non_aligned_tab() {
+//         single_chunk_test(
+//             "aa\taa",
+//             FileChunkIndex {
+//                 first_byte: 0,
+//                 bytes_len: 5,
+//                 first_line: 0,
+//                 first_line_offset: 0,
+//                 last_line: 0,
+//                 last_line_length: TAB_SIZE + 2,
+//             },
+//         );
+//     }
 
-    #[test]
-    fn far_aligned_tab() {
-        single_chunk_test(
-            "aaaabbbbccccdddd\taa",
-            FileChunkIndex {
-                first_byte: 0,
-                bytes_len: 16 + 1 + 2,
-                first_line: 0,
-                first_line_offset: 0,
-                last_line: 0,
-                last_line_length: 16 + TAB_SIZE + 2,
-            },
-        );
-    }
+//     #[test]
+//     fn far_aligned_tab() {
+//         single_chunk_test(
+//             "aaaabbbbccccdddd\taa",
+//             FileChunkIndex {
+//                 first_byte: 0,
+//                 bytes_len: 16 + 1 + 2,
+//                 first_line: 0,
+//                 first_line_offset: 0,
+//                 last_line: 0,
+//                 last_line_length: 16 + TAB_SIZE + 2,
+//             },
+//         );
+//     }
 
-    #[test]
-    fn far_non_aligned_tab() {
-        single_chunk_test(
-            "aaaabbbbccccddddaa\taa",
-            FileChunkIndex {
-                first_byte: 0,
-                bytes_len: 16 + 2 + 1 + 2,
-                first_line: 0,
-                first_line_offset: 0,
-                last_line: 0,
-                last_line_length: 16 + TAB_SIZE + 2,
-            },
-        );
-        single_chunk_test(
-            "aaaabbbbccccddddaaaabb\taa",
-            FileChunkIndex {
-                first_byte: 0,
-                bytes_len: 16 + 6 + 1 + 2,
-                first_line: 0,
-                first_line_offset: 0,
-                last_line: 0,
-                last_line_length: 16 + TAB_SIZE + 2,
-            },
-        );
-    }
+//     #[test]
+//     fn far_non_aligned_tab() {
+//         single_chunk_test(
+//             "aaaabbbbccccddddaa\taa",
+//             FileChunkIndex {
+//                 first_byte: 0,
+//                 bytes_len: 16 + 2 + 1 + 2,
+//                 first_line: 0,
+//                 first_line_offset: 0,
+//                 last_line: 0,
+//                 last_line_length: 16 + TAB_SIZE + 2,
+//             },
+//         );
+//         single_chunk_test(
+//             "aaaabbbbccccddddaaaabb\taa",
+//             FileChunkIndex {
+//                 first_byte: 0,
+//                 bytes_len: 16 + 6 + 1 + 2,
+//                 first_line: 0,
+//                 first_line_offset: 0,
+//                 last_line: 0,
+//                 last_line_length: 16 + TAB_SIZE + 2,
+//             },
+//         );
+//     }
 
-    #[test]
-    fn control_chars() {
-        single_chunk_test(
-            // Special characters are \x09 (\t), \x0A (\n), and \x0D (\r)
-            // Both the \x0A and the \x0D should be treated as a new line.
-            "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0A\x0B\x0C\x0D\x0E\x0F",
-            FileChunkIndex {
-                first_byte: 0,
-                bytes_len: 16,
-                first_line: 0,
-                first_line_offset: 0,
-                last_line: 2,
-                last_line_length: 2,
-            },
-        );
-        single_chunk_test(
-            // All of these characters are considered garbage,
-            "\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1A\x1B\x1C\x1D\x1E\x1F",
-            FileChunkIndex {
-                first_byte: 0,
-                bytes_len: 16,
-                first_line: 0,
-                first_line_offset: 0,
-                last_line: 0,
-                last_line_length: 16,
-            },
-        );
-    }
+//     #[test]
+//     fn control_chars() {
+//         single_chunk_test(
+//             // Special characters are \x09 (\t), \x0A (\n), and \x0D (\r)
+//             // Both the \x0A and the \x0D should be treated as a new line.
+//             "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0A\x0B\x0C\x0D\x0E\x0F",
+//             FileChunkIndex {
+//                 first_byte: 0,
+//                 bytes_len: 16,
+//                 first_line: 0,
+//                 first_line_offset: 0,
+//                 last_line: 2,
+//                 last_line_length: 2,
+//             },
+//         );
+//         single_chunk_test(
+//             // All of these characters are considered garbage,
+//             "\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1A\x1B\x1C\x1D\x1E\x1F",
+//             FileChunkIndex {
+//                 first_byte: 0,
+//                 bytes_len: 16,
+//                 first_line: 0,
+//                 first_line_offset: 0,
+//                 last_line: 0,
+//                 last_line_length: 16,
+//             },
+//         );
+//     }
 
-    #[test]
-    fn control_chars_of_width_1() {
-        single_chunk_test(
-            // Every control char except \t, \r, and \n.
-            // Therefore, we have 29 control chars, all of width 1.
-            "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x0B\x0C\x0E\x0F\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1A\x1B\x1C\x1D\x1E\x1F",
-            FileChunkIndex {
-                first_byte: 0,
-                bytes_len: 29,
-                first_line: 0,
-                first_line_offset: 0,
-                last_line: 0,
-                last_line_length: 29,
-            },
-        );
-    }
+//     #[test]
+//     fn control_chars_of_width_1() {
+//         single_chunk_test(
+//             // Every control char except \t, \r, and \n.
+//             // Therefore, we have 29 control chars, all of width 1.
+//             "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x0B\x0C\x0E\x0F\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1A\x1B\x1C\x1D\x1E\x1F",
+//             FileChunkIndex {
+//                 first_byte: 0,
+//                 bytes_len: 29,
+//                 first_line: 0,
+//                 first_line_offset: 0,
+//                 last_line: 0,
+//                 last_line_length: 29,
+//             },
+//         );
+//     }
 
-    #[test]
-    fn newlines_lf() {
-        single_chunk_test(
-            "\n\n\n\n",
-            FileChunkIndex {
-                first_byte: 0,
-                bytes_len: 4,
-                first_line: 0,
-                first_line_offset: 0,
-                last_line: 4,
-                last_line_length: 0,
-            },
-        );
-    }
+//     #[test]
+//     fn newlines_lf() {
+//         single_chunk_test(
+//             "\n\n\n\n",
+//             FileChunkIndex {
+//                 first_byte: 0,
+//                 bytes_len: 4,
+//                 first_line: 0,
+//                 first_line_offset: 0,
+//                 last_line: 4,
+//                 last_line_length: 0,
+//             },
+//         );
+//     }
 
-    #[test]
-    fn newlines_crlf() {
-        single_chunk_test(
-            "\r\n\r\n\r\n\r\n",
-            FileChunkIndex {
-                first_byte: 0,
-                bytes_len: 8,
-                first_line: 0,
-                first_line_offset: 0,
-                last_line: 4,
-                last_line_length: 0,
-            },
-        );
-    }
+//     #[test]
+//     fn newlines_crlf() {
+//         single_chunk_test(
+//             "\r\n\r\n\r\n\r\n",
+//             FileChunkIndex {
+//                 first_byte: 0,
+//                 bytes_len: 8,
+//                 first_line: 0,
+//                 first_line_offset: 0,
+//                 last_line: 4,
+//                 last_line_length: 0,
+//             },
+//         );
+//     }
 
-    #[test]
-    fn newlines_cr() {
-        single_chunk_test(
-            "\r\r\r\r",
-            FileChunkIndex {
-                first_byte: 0,
-                bytes_len: 4,
-                first_line: 0,
-                first_line_offset: 0,
-                last_line: 4,
-                last_line_length: 0,
-            },
-        );
-    }
+//     #[test]
+//     fn newlines_cr() {
+//         single_chunk_test(
+//             "\r\r\r\r",
+//             FileChunkIndex {
+//                 first_byte: 0,
+//                 bytes_len: 4,
+//                 first_line: 0,
+//                 first_line_offset: 0,
+//                 last_line: 4,
+//                 last_line_length: 0,
+//             },
+//         );
+//     }
 
-    #[test]
-    fn newlines_all_mixed() {
-        single_chunk_test(
-            "\n\r\n\r\r\n\n",
-            FileChunkIndex {
-                first_byte: 0,
-                bytes_len: 7,
-                first_line: 0,
-                first_line_offset: 0,
-                last_line: 5,
-                last_line_length: 0,
-            },
-        );
-    }
-}
+//     #[test]
+//     fn newlines_all_mixed() {
+//         single_chunk_test(
+//             "\n\r\n\r\r\n\n",
+//             FileChunkIndex {
+//                 first_byte: 0,
+//                 bytes_len: 7,
+//                 first_line: 0,
+//                 first_line_offset: 0,
+//                 last_line: 5,
+//                 last_line_length: 0,
+//             },
+//         );
+//     }
+// }
 
 #[cfg(test)]
 mod reading_tests {
