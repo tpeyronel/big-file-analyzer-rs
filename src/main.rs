@@ -75,9 +75,9 @@ fn run() -> io::Result<()> {
     Ok(())
 }
 
-fn read_and_print_window<T: Read + Seek>(
+fn read_and_print_window(
     stdout: &mut io::Stdout,
-    editor: &mut BigFileEditor<T>,
+    editor: &mut BigFileEditor,
     frame: &FileWindowFrame,
 ) -> io::Result<()> {
     queue!(

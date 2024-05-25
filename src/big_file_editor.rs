@@ -36,27 +36,25 @@ struct WalkState {
     prev_cr: bool,
 }
 
-#[derive(Debug)]
-pub struct BigFileEditor<T: Read + Seek> {
+pub trait ReadSeek: Read + Seek {}
+impl<T: Read + Seek> ReadSeek for T {}
+
+pub struct BigFileEditor {
     chunks: Vec<FileChunkIndex>,
-    reader: T,
+    reader: Box<dyn ReadSeek>,
 }
 
-impl BigFileEditor<BufReader<File>> {
-    pub fn from_path<P: AsRef<Path>>(path: P) -> io::Result<Self> {
+impl BigFileEditor {
+    pub fn from_path(path: impl AsRef<Path>) -> io::Result<Self> {
         let file = File::open(path)?;
         Ok(Self::from_file(file))
     }
-}
 
-impl BigFileEditor<BufReader<File>> {
     pub fn from_file(file: File) -> Self {
         Self::from_reader(std::io::BufReader::new(file))
     }
-}
 
-impl<T: Read + Seek> BigFileEditor<T> {
-    pub fn from_reader(mut reader: T) -> Self {
+    pub fn from_reader(mut reader: impl Read + Seek + 'static) -> Self {
         // TODO: seek 0 (?
         // TODO: handle potential UTF-8 BOM.
         let mut buf = vec![0; 64 * 1024 * 1024];
@@ -120,7 +118,10 @@ impl<T: Read + Seek> BigFileEditor<T> {
             });
         }
 
-        Self { chunks, reader }
+        Self {
+            chunks,
+            reader: Box::new(reader),
+        }
     }
 
     pub fn read_window(&mut self, frame: &FileWindowFrame) -> FileWindow {
@@ -314,7 +315,7 @@ impl<T: Read + Seek> BigFileEditor<T> {
     }
 }
 
-impl BigFileEditor<Cursor<String>> {
+impl BigFileEditor {
     fn from_str(s: &str) -> Self {
         Self::from_reader(Cursor::new(s.to_owned()))
     }
