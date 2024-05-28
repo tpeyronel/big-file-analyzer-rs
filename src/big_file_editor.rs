@@ -5,6 +5,8 @@ use std::{
     path::Path,
 };
 
+use tokio::sync::mpsc;
+
 use crate::file::ReadRetry;
 
 pub const TAB_SIZE: usize = 8;
@@ -14,6 +16,8 @@ const ASCII_LF: u8 = 10;
 const ASCII_CR: u8 = 13;
 
 const CHUNK_SIZE: usize = 4096;
+
+const CHANNEL_SIZE: usize = 32;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileWindowFrame {
@@ -39,9 +43,36 @@ struct WalkState {
 pub trait ReadSeek: Read + Seek {}
 impl<T: Read + Seek> ReadSeek for T {}
 
+pub struct WindowSubscriber {
+    frame_tx: mpsc::Sender<FileWindowFrame>,
+    window_rx: mpsc::Receiver<FileWindow>,
+}
+
+struct WindowSubscription {
+    frame_rx: mpsc::Receiver<FileWindowFrame>,
+    window_tx: mpsc::Sender<FileWindow>,
+}
+
+impl WindowSubscriber {
+    pub async fn set_frame(&self, frame: FileWindowFrame) {
+        self.frame_tx.send(frame).await.expect("TODO")
+    }
+
+    pub async fn read_window(&mut self) -> Option<FileWindow> {
+        let mut window = self.window_rx.recv().await?;
+
+        while let Ok(newer_window) = self.window_rx.try_recv() {
+            window = newer_window;
+        }
+
+        Some(window)
+    }
+}
+
 pub struct BigFileEditor {
     chunks: Vec<FileChunkIndex>,
     reader: Box<dyn ReadSeek>,
+    subscriptions: Vec<WindowSubscription>,
 }
 
 impl BigFileEditor {
@@ -121,6 +152,7 @@ impl BigFileEditor {
         Self {
             chunks,
             reader: Box::new(reader),
+            subscriptions: vec![],
         }
     }
 
@@ -142,6 +174,24 @@ impl BigFileEditor {
                 ..*frame
             },
         };
+    }
+
+    pub fn subscribe_window(&mut self, initial_frame: FileWindowFrame) -> WindowSubscriber {
+        let (frame_tx, frame_rx) = mpsc::channel(CHANNEL_SIZE);
+        let (window_tx, window_rx) = mpsc::channel(CHANNEL_SIZE);
+
+        frame_tx.blocking_send(initial_frame).unwrap();
+
+        let client = WindowSubscription {
+            frame_rx,
+            window_tx,
+        };
+        self.subscriptions.push(client);
+
+        WindowSubscriber {
+            frame_tx,
+            window_rx,
+        }
     }
 
     // first_column should be a multiple of TAB_SIZE
