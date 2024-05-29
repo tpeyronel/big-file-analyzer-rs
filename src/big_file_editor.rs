@@ -2,7 +2,10 @@ use std::{
     cmp::Ordering,
     fs::File,
     io::{self, BufReader, Cursor, Read, Seek, SeekFrom},
+    ops::{Deref, DerefMut},
     path::Path,
+    sync::{Arc, Mutex},
+    thread::{self, JoinHandle},
 };
 
 use tokio::sync::mpsc;
@@ -18,6 +21,7 @@ const ASCII_CR: u8 = 13;
 const CHUNK_SIZE: usize = 4096;
 
 const CHANNEL_SIZE: usize = 32;
+const UPDATE_CHANNEL_SIZE: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileWindowFrame {
@@ -69,9 +73,21 @@ impl WindowSubscriber {
     }
 }
 
+struct IndexUpdate {
+    new_chunks: Vec<FileChunkIndex>,
+}
+
+enum BigFileEditorState {
+    Indexing {
+        update_rx: mpsc::Receiver<IndexUpdate>,
+    },
+    Indexed,
+}
+
 pub struct BigFileEditor {
+    state: BigFileEditorState,
     chunks: Vec<FileChunkIndex>,
-    reader: Box<dyn ReadSeek>,
+    reader: Arc<Mutex<dyn ReadSeek>>,
     subscriptions: Vec<WindowSubscription>,
 }
 
@@ -85,78 +101,31 @@ impl BigFileEditor {
         Self::from_reader(std::io::BufReader::new(file))
     }
 
-    pub fn from_reader(mut reader: impl Read + Seek + 'static) -> Self {
-        // TODO: seek 0 (?
-        // TODO: handle potential UTF-8 BOM.
-        let mut buf = vec![0; 64 * 1024 * 1024];
+    pub fn from_reader(reader: impl Read + Seek + Send + 'static) -> Self {
+        let reader = Arc::new(Mutex::new(reader));
+        let (update_tx, update_rx) = mpsc::channel(UPDATE_CHANNEL_SIZE);
 
-        let mut chunks = vec![];
-
-        let mut first_line = 0;
-        let mut first_column = 0;
-        let mut chunk_first_byte = 0;
-        let mut chunk_bytes = 0;
-        let mut walk_state = WalkState {
-            curr_line: 0,
-            curr_column: 0,
-            prev_cr: false,
-        };
-
-        loop {
-            let bytes_read = reader.read(&mut buf).expect("TODO");
-            if bytes_read == 0 {
-                break;
-            }
-
-            for i in 0..bytes_read as u32 {
-                let c = buf[i as usize];
-
-                // We want to make sure that we dont split a \r\n between two chunks.
-                // That's why we check for (!prev_cr || c != ASCII_LF).
-                // That's also the reason why we push *before* processing c.
-                // Explanation: if !prev_cr, then we can push as there is no risk of \r\n,
-                // but if prev_cr, then there are two cases: c == \n or c != \n.
-                // If c == \n, then we *don't* push, because we want that character inside the
-                // chunk (it will be pushed in the next iteration, as prev_cr will be false).
-                // If c != \n, then we can safely push.
-                if chunk_bytes >= CHUNK_SIZE && (!walk_state.prev_cr || c != ASCII_LF) {
-                    chunks.push(FileChunkIndex {
-                        first_byte: chunk_first_byte,
-                        bytes_len: chunk_bytes,
-                        first_line,
-                        first_line_offset: first_column,
-                    });
-
-                    chunk_first_byte += chunk_bytes;
-                    chunk_bytes = 0;
-
-                    first_line = walk_state.curr_line;
-                    first_column = walk_state.curr_column;
-                }
-
-                Self::advance_char(c, &mut walk_state);
-
-                chunk_bytes += 1;
-            }
-        }
-
-        if chunk_bytes > 0 {
-            chunks.push(FileChunkIndex {
-                first_byte: chunk_first_byte,
-                bytes_len: chunk_bytes,
-                first_line,
-                first_line_offset: first_column,
-            });
-        }
+        let _indexing_thread_handle = Self::launch_indexing_thread(reader.clone(), update_tx);
 
         Self {
-            chunks,
-            reader: Box::new(reader),
+            state: BigFileEditorState::Indexing { update_rx },
+            chunks: vec![],
+            reader,
             subscriptions: vec![],
         }
     }
 
     pub fn read_window(&mut self, frame: &FileWindowFrame) -> FileWindow {
+        match &mut self.state {
+            BigFileEditorState::Indexing { update_rx } => {
+                while let Some(mut update) = update_rx.blocking_recv() {
+                    self.chunks.append(&mut update.new_chunks);
+                }
+                self.state = BigFileEditorState::Indexed;
+            },
+            BigFileEditorState::Indexed => (),
+        }
+
         let mut lines = vec![];
 
         let alignment_offset = frame.first_column % TAB_SIZE;
@@ -194,6 +163,89 @@ impl BigFileEditor {
         }
     }
 
+    fn launch_indexing_thread(
+        reader: Arc<Mutex<dyn ReadSeek + Send>>,
+        update_tx: mpsc::Sender<IndexUpdate>,
+    ) -> JoinHandle<()> {
+        thread::spawn(move || {
+            // TODO: seek 0 (?
+            // TODO: handle potential UTF-8 BOM.
+            let mut buf = vec![0; 64 * 1024 * 1024];
+
+            let mut chunks = vec![];
+
+            let mut first_line = 0;
+            let mut first_column = 0;
+            let mut chunk_first_byte = 0;
+            let mut chunk_bytes = 0;
+            let mut walk_state = WalkState {
+                curr_line: 0,
+                curr_column: 0,
+                prev_cr: false,
+            };
+
+            let mut read_offset = 0;
+
+            loop {
+                let bytes_read = Self::read_with_retry(reader.deref(), read_offset, &mut buf);
+                if bytes_read == 0 {
+                    break;
+                }
+                read_offset += bytes_read;
+
+                for i in 0..bytes_read as u32 {
+                    let c = buf[i as usize];
+
+                    // We want to make sure that we dont split a \r\n between two chunks.
+                    // That's why we check for (!prev_cr || c != ASCII_LF).
+                    // That's also the reason why we push *before* processing c.
+                    // Explanation: if !prev_cr, then we can push as there is no risk of \r\n,
+                    // but if prev_cr, then there are two cases: c == \n or c != \n.
+                    // If c == \n, then we *don't* push, because we want that character inside the
+                    // chunk (it will be pushed in the next iteration, as prev_cr will be false).
+                    // If c != \n, then we can safely push.
+                    if chunk_bytes >= CHUNK_SIZE && (!walk_state.prev_cr || c != ASCII_LF) {
+                        chunks.push(FileChunkIndex {
+                            first_byte: chunk_first_byte,
+                            bytes_len: chunk_bytes,
+                            first_line,
+                            first_line_offset: first_column,
+                        });
+
+                        chunk_first_byte += chunk_bytes;
+                        chunk_bytes = 0;
+
+                        first_line = walk_state.curr_line;
+                        first_column = walk_state.curr_column;
+                    }
+
+                    Self::advance_char(c, &mut walk_state);
+
+                    chunk_bytes += 1;
+                }
+            }
+
+            if chunk_bytes > 0 {
+                chunks.push(FileChunkIndex {
+                    first_byte: chunk_first_byte,
+                    bytes_len: chunk_bytes,
+                    first_line,
+                    first_line_offset: first_column,
+                });
+
+                let update = IndexUpdate { new_chunks: chunks };
+
+                update_tx.blocking_send(update).expect("TODO");
+            }
+        })
+    }
+
+    fn read_with_retry(reader: &Mutex<dyn ReadSeek>, offset: usize, buf: &mut [u8]) -> usize {
+        let mut reader = reader.lock().expect("TODO");
+        reader.seek(SeekFrom::Start(offset as u64)).expect("TODO");
+        reader.deref_mut().read_with_retry(buf).expect("TODO")
+    }
+
     // first_column should be a multiple of TAB_SIZE
     fn read_line(&mut self, l: usize, first_column: usize, columns: usize) -> String {
         assert_eq!(first_column % TAB_SIZE, 0);
@@ -221,10 +273,9 @@ impl BigFileEditor {
 
         // Read first chunk.
         let mut buf = vec![0u8; first_chunk.bytes_len];
-        self.reader
-            .seek(SeekFrom::Start(first_chunk.first_byte as u64))
-            .expect("TODO");
-        let mut bytes_read = self.reader.read_with_retry(&mut buf).unwrap();
+        let mut read_offset = first_chunk.first_byte;
+        let mut bytes_read = Self::read_with_retry(&self.reader, read_offset, &mut buf);
+        read_offset += bytes_read;
         assert_eq!(bytes_read, first_chunk.bytes_len); // TODO: handle
 
         let mut buf_idx = 0;
@@ -313,7 +364,8 @@ impl BigFileEditor {
             let chunk = &self.chunks[chunk_index];
             buf_idx = 0;
             buf.resize(chunk.bytes_len, 0);
-            bytes_read = self.reader.read_with_retry(&mut buf).expect("TODO");
+            bytes_read = Self::read_with_retry(&self.reader, read_offset, &mut buf);
+            read_offset += bytes_read;
 
             assert!(bytes_read > 0);
         }
