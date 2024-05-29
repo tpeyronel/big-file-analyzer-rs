@@ -353,10 +353,14 @@ impl BigFileEditor {
 
             chunk_index += 1;
 
-            // If we read all the requested columns,
+            // If we read the entire line,
+            // or if we read all the requested columns,
             // or if we reached EOF (indicated by having no further chunks),
             // then break and return what we have read.
-            if walk_state.curr_column >= last_column || chunk_index >= self.chunks.len() {
+            if walk_state.curr_line > l
+                || walk_state.curr_column >= last_column
+                || chunk_index >= self.chunks.len()
+            {
                 break;
             }
 
