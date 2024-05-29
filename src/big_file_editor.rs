@@ -1,11 +1,12 @@
 use std::{
     cmp::Ordering,
     fs::File,
-    io::{self, BufReader, Cursor, Read, Seek, SeekFrom},
+    io::{self, Cursor, Read, Seek, SeekFrom},
     ops::{Deref, DerefMut},
     path::Path,
     sync::{Arc, Mutex},
-    thread::{self, JoinHandle},
+    thread::{self},
+    time::{Duration, Instant},
 };
 
 use tokio::sync::mpsc;
@@ -18,10 +19,14 @@ const ASCII_HT: u8 = 9;
 const ASCII_LF: u8 = 10;
 const ASCII_CR: u8 = 13;
 
+const INDEXING_BUFFER_SIZE: usize = 1024 * 1024;
+
 const CHUNK_SIZE: usize = 4096;
 
 const CHANNEL_SIZE: usize = 32;
 const UPDATE_CHANNEL_SIZE: usize = 128;
+
+const UPDATE_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileWindowFrame {
@@ -169,9 +174,8 @@ impl BigFileEditor {
         reader: Arc<Mutex<dyn ReadSeek + Send>>,
         update_tx: mpsc::Sender<IndexUpdate>,
     ) {
-        // TODO: seek 0 (?
         // TODO: handle potential UTF-8 BOM.
-        let mut buf = vec![0; 64 * 1024 * 1024];
+        let mut buf = vec![0; INDEXING_BUFFER_SIZE];
 
         let mut chunks = vec![];
 
@@ -186,8 +190,14 @@ impl BigFileEditor {
         };
 
         let mut read_offset = 0;
+        let mut last_update = Instant::now();
 
         loop {
+            if last_update.elapsed() >= UPDATE_INTERVAL {
+                Self::send_update(&update_tx, std::mem::replace(&mut chunks, vec![]));
+                last_update = Instant::now();
+            }
+
             let bytes_read = Self::read_with_retry(reader.deref(), read_offset, &mut buf);
             if bytes_read == 0 {
                 break;
@@ -233,11 +243,19 @@ impl BigFileEditor {
                 first_line,
                 first_line_offset: first_column,
             });
-
-            let update = IndexUpdate { new_chunks: chunks };
-
-            update_tx.blocking_send(update).expect("TODO");
         }
+
+        Self::send_update(&update_tx, chunks);
+    }
+
+    fn send_update(update_tx: &mpsc::Sender<IndexUpdate>, chunks: Vec<FileChunkIndex>) {
+        if chunks.is_empty() {
+            return;
+        }
+
+        let update = IndexUpdate { new_chunks: chunks };
+
+        update_tx.blocking_send(update).expect("TODO");
     }
 
     fn read_with_retry(reader: &Mutex<dyn ReadSeek>, offset: usize, buf: &mut [u8]) -> usize {
