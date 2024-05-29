@@ -105,7 +105,9 @@ impl BigFileEditor {
         let reader = Arc::new(Mutex::new(reader));
         let (update_tx, update_rx) = mpsc::channel(UPDATE_CHANNEL_SIZE);
 
-        let _indexing_thread_handle = Self::launch_indexing_thread(reader.clone(), update_tx);
+        let reader_clone = reader.clone();
+        let _indexing_thread_handle =
+            thread::spawn(move || Self::run_indexing_thread(reader_clone, update_tx));
 
         Self {
             state: BigFileEditorState::Indexing { update_rx },
@@ -163,81 +165,79 @@ impl BigFileEditor {
         }
     }
 
-    fn launch_indexing_thread(
+    fn run_indexing_thread(
         reader: Arc<Mutex<dyn ReadSeek + Send>>,
         update_tx: mpsc::Sender<IndexUpdate>,
-    ) -> JoinHandle<()> {
-        thread::spawn(move || {
-            // TODO: seek 0 (?
-            // TODO: handle potential UTF-8 BOM.
-            let mut buf = vec![0; 64 * 1024 * 1024];
+    ) {
+        // TODO: seek 0 (?
+        // TODO: handle potential UTF-8 BOM.
+        let mut buf = vec![0; 64 * 1024 * 1024];
 
-            let mut chunks = vec![];
+        let mut chunks = vec![];
 
-            let mut first_line = 0;
-            let mut first_column = 0;
-            let mut chunk_first_byte = 0;
-            let mut chunk_bytes = 0;
-            let mut walk_state = WalkState {
-                curr_line: 0,
-                curr_column: 0,
-                prev_cr: false,
-            };
+        let mut first_line = 0;
+        let mut first_column = 0;
+        let mut chunk_first_byte = 0;
+        let mut chunk_bytes = 0;
+        let mut walk_state = WalkState {
+            curr_line: 0,
+            curr_column: 0,
+            prev_cr: false,
+        };
 
-            let mut read_offset = 0;
+        let mut read_offset = 0;
 
-            loop {
-                let bytes_read = Self::read_with_retry(reader.deref(), read_offset, &mut buf);
-                if bytes_read == 0 {
-                    break;
-                }
-                read_offset += bytes_read;
-
-                for i in 0..bytes_read as u32 {
-                    let c = buf[i as usize];
-
-                    // We want to make sure that we dont split a \r\n between two chunks.
-                    // That's why we check for (!prev_cr || c != ASCII_LF).
-                    // That's also the reason why we push *before* processing c.
-                    // Explanation: if !prev_cr, then we can push as there is no risk of \r\n,
-                    // but if prev_cr, then there are two cases: c == \n or c != \n.
-                    // If c == \n, then we *don't* push, because we want that character inside the
-                    // chunk (it will be pushed in the next iteration, as prev_cr will be false).
-                    // If c != \n, then we can safely push.
-                    if chunk_bytes >= CHUNK_SIZE && (!walk_state.prev_cr || c != ASCII_LF) {
-                        chunks.push(FileChunkIndex {
-                            first_byte: chunk_first_byte,
-                            bytes_len: chunk_bytes,
-                            first_line,
-                            first_line_offset: first_column,
-                        });
-
-                        chunk_first_byte += chunk_bytes;
-                        chunk_bytes = 0;
-
-                        first_line = walk_state.curr_line;
-                        first_column = walk_state.curr_column;
-                    }
-
-                    Self::advance_char(c, &mut walk_state);
-
-                    chunk_bytes += 1;
-                }
+        loop {
+            let bytes_read = Self::read_with_retry(reader.deref(), read_offset, &mut buf);
+            if bytes_read == 0 {
+                break;
             }
+            read_offset += bytes_read;
 
-            if chunk_bytes > 0 {
-                chunks.push(FileChunkIndex {
-                    first_byte: chunk_first_byte,
-                    bytes_len: chunk_bytes,
-                    first_line,
-                    first_line_offset: first_column,
-                });
+            for i in 0..bytes_read as u32 {
+                let c = buf[i as usize];
 
-                let update = IndexUpdate { new_chunks: chunks };
+                // We want to make sure that we dont split a \r\n between two chunks.
+                // That's why we check for (!prev_cr || c != ASCII_LF).
+                // That's also the reason why we push *before* processing c.
+                // Explanation: if !prev_cr, then we can push as there is no risk of \r\n,
+                // but if prev_cr, then there are two cases: c == \n or c != \n.
+                // If c == \n, then we *don't* push, because we want that character inside the
+                // chunk (it will be pushed in the next iteration, as prev_cr will be false).
+                // If c != \n, then we can safely push.
+                if chunk_bytes >= CHUNK_SIZE && (!walk_state.prev_cr || c != ASCII_LF) {
+                    chunks.push(FileChunkIndex {
+                        first_byte: chunk_first_byte,
+                        bytes_len: chunk_bytes,
+                        first_line,
+                        first_line_offset: first_column,
+                    });
 
-                update_tx.blocking_send(update).expect("TODO");
+                    chunk_first_byte += chunk_bytes;
+                    chunk_bytes = 0;
+
+                    first_line = walk_state.curr_line;
+                    first_column = walk_state.curr_column;
+                }
+
+                Self::advance_char(c, &mut walk_state);
+
+                chunk_bytes += 1;
             }
-        })
+        }
+
+        if chunk_bytes > 0 {
+            chunks.push(FileChunkIndex {
+                first_byte: chunk_first_byte,
+                bytes_len: chunk_bytes,
+                first_line,
+                first_line_offset: first_column,
+            });
+
+            let update = IndexUpdate { new_chunks: chunks };
+
+            update_tx.blocking_send(update).expect("TODO");
+        }
     }
 
     fn read_with_retry(reader: &Mutex<dyn ReadSeek>, offset: usize, buf: &mut [u8]) -> usize {
