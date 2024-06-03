@@ -152,11 +152,11 @@ impl BigFileEditor {
         };
     }
 
-    pub fn subscribe_window(&mut self, initial_frame: FileWindowFrame) -> WindowSubscriber {
+    pub async fn subscribe_window(&mut self, initial_frame: FileWindowFrame) -> WindowSubscriber {
         let (frame_tx, frame_rx) = mpsc::channel(CHANNEL_SIZE);
         let (window_tx, window_rx) = mpsc::channel(CHANNEL_SIZE);
 
-        frame_tx.blocking_send(initial_frame).unwrap();
+        frame_tx.send(initial_frame).await.unwrap();
 
         let client = WindowSubscription {
             frame_rx,
