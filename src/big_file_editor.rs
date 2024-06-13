@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::file::ReadRetry;
 
@@ -84,14 +84,14 @@ struct IndexUpdate {
 
 enum BigFileEditorState {
     Indexing {
-        update_rx: mpsc::Receiver<IndexUpdate>,
+        indexing_done_rx: Option<oneshot::Receiver<()>>,
     },
     Indexed,
 }
 
 pub struct BigFileEditor {
     state: BigFileEditorState,
-    chunks: Vec<FileChunkIndex>,
+    chunks: watch::Receiver<Vec<FileChunkIndex>>,
     reader: Arc<Mutex<dyn ReadSeek>>,
     subscriptions: Vec<WindowSubscription>,
 }
@@ -108,15 +108,20 @@ impl BigFileEditor {
 
     pub fn from_reader(reader: impl Read + Seek + Send + 'static) -> Self {
         let reader = Arc::new(Mutex::new(reader));
-        let (update_tx, update_rx) = mpsc::channel(UPDATE_CHANNEL_SIZE);
+
+        let (indexing_done_tx, indexing_done_rx) = oneshot::channel();
+        let (index_tx, index_rx) = watch::channel(vec![]);
 
         let reader_clone = reader.clone();
-        let _indexing_thread_handle =
-            thread::spawn(move || Self::run_indexing_thread(reader_clone, update_tx));
+        let _indexing_thread_handle = thread::spawn(move || {
+            Self::run_indexing_thread(reader_clone, index_tx, indexing_done_tx)
+        });
 
         Self {
-            state: BigFileEditorState::Indexing { update_rx },
-            chunks: vec![],
+            state: BigFileEditorState::Indexing {
+                indexing_done_rx: Some(indexing_done_rx),
+            },
+            chunks: index_rx,
             reader,
             subscriptions: vec![],
         }
@@ -124,10 +129,12 @@ impl BigFileEditor {
 
     pub fn read_window(&mut self, frame: &FileWindowFrame) -> FileWindow {
         match &mut self.state {
-            BigFileEditorState::Indexing { update_rx } => {
-                while let Some(mut update) = update_rx.blocking_recv() {
-                    self.chunks.append(&mut update.new_chunks);
-                }
+            BigFileEditorState::Indexing { indexing_done_rx } => {
+                indexing_done_rx
+                    .take()
+                    .unwrap()
+                    .blocking_recv()
+                    .expect("TODO");
                 self.state = BigFileEditorState::Indexed;
             },
             BigFileEditorState::Indexed => (),
@@ -172,7 +179,8 @@ impl BigFileEditor {
 
     fn run_indexing_thread(
         reader: Arc<Mutex<dyn ReadSeek + Send>>,
-        update_tx: mpsc::Sender<IndexUpdate>,
+        index_tx: watch::Sender<Vec<FileChunkIndex>>,
+        indexing_done_tx: oneshot::Sender<()>,
     ) {
         // TODO: handle potential UTF-8 BOM.
         let mut buf = vec![0; INDEXING_BUFFER_SIZE];
@@ -194,7 +202,7 @@ impl BigFileEditor {
 
         loop {
             if last_update.elapsed() >= UPDATE_INTERVAL {
-                Self::send_update(&update_tx, std::mem::replace(&mut chunks, vec![]));
+                Self::update_index(&index_tx, std::mem::replace(&mut chunks, vec![]));
                 last_update = Instant::now();
             }
 
@@ -245,17 +253,22 @@ impl BigFileEditor {
             });
         }
 
-        Self::send_update(&update_tx, chunks);
+        Self::update_index(&index_tx, chunks);
+
+        indexing_done_tx.send(()).expect("TODO");
     }
 
-    fn send_update(update_tx: &mpsc::Sender<IndexUpdate>, chunks: Vec<FileChunkIndex>) {
-        if chunks.is_empty() {
+    fn update_index(
+        index_tx: &watch::Sender<Vec<FileChunkIndex>>,
+        new_chunks: Vec<FileChunkIndex>,
+    ) {
+        if new_chunks.is_empty() {
             return;
         }
 
-        let update = IndexUpdate { new_chunks: chunks };
-
-        update_tx.blocking_send(update).expect("TODO");
+        index_tx.send_modify(|chunks| {
+            chunks.extend(new_chunks);
+        });
     }
 
     fn read_with_retry(reader: &Mutex<dyn ReadSeek>, offset: usize, buf: &mut [u8]) -> usize {
@@ -268,18 +281,20 @@ impl BigFileEditor {
     fn read_line(&mut self, l: usize, first_column: usize, columns: usize) -> String {
         assert_eq!(first_column % TAB_SIZE, 0);
 
-        // Find the chunk in which l:window.first_column is.
-        let first_chunk_index = self.find_chunk_by_coordinates(l, first_column);
-        assert!(first_chunk_index < self.chunks.len());
+        let chunks = self.chunks.borrow();
 
-        let first_chunk = &self.chunks[first_chunk_index];
+        // Find the chunk in which l:window.first_column is.
+        let first_chunk_index = Self::find_chunk_by_coordinates(&chunks, l, first_column);
+        assert!(first_chunk_index < chunks.len());
+
+        let first_chunk = &chunks[first_chunk_index];
 
         assert!(
             first_chunk.first_line < l
                 || (first_chunk.first_line == l && first_chunk.first_line_offset <= first_column)
         );
-        if first_chunk_index + 1 < self.chunks.len() {
-            let next_chunk = &self.chunks[first_chunk_index + 1];
+        if first_chunk_index + 1 < chunks.len() {
+            let next_chunk = &chunks[first_chunk_index + 1];
             assert!(
                 next_chunk.first_line > l
                     || (next_chunk.first_line == l && next_chunk.first_line_offset > first_column)
@@ -377,13 +392,13 @@ impl BigFileEditor {
             // then break and return what we have read.
             if walk_state.curr_line > l
                 || walk_state.curr_column >= last_column
-                || chunk_index >= self.chunks.len()
+                || chunk_index >= chunks.len()
             {
                 break;
             }
 
             // Prepare for next iteration by reading the next chunk.
-            let chunk = &self.chunks[chunk_index];
+            let chunk = &chunks[chunk_index];
             buf_idx = 0;
             buf.resize(chunk.bytes_len, 0);
             bytes_read = Self::read_with_retry(&self.reader, read_offset, &mut buf);
@@ -395,8 +410,12 @@ impl BigFileEditor {
         line
     }
 
-    fn find_chunk_by_coordinates(&self, line: usize, column: usize) -> usize {
-        match self.chunks.binary_search_by(|chunk| {
+    fn find_chunk_by_coordinates(
+        chunks: &Vec<FileChunkIndex>,
+        line: usize,
+        column: usize,
+    ) -> usize {
+        match chunks.binary_search_by(|chunk| {
             if line < chunk.first_line {
                 Ordering::Greater
             } else if line > chunk.first_line {
