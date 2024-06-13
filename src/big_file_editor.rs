@@ -24,7 +24,6 @@ const INDEXING_BUFFER_SIZE: usize = 1024 * 1024;
 const CHUNK_SIZE: usize = 4096;
 
 const CHANNEL_SIZE: usize = 32;
-const UPDATE_CHANNEL_SIZE: usize = 128;
 
 const UPDATE_INTERVAL: Duration = Duration::from_millis(100);
 
