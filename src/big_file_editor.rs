@@ -52,28 +52,30 @@ pub trait ReadSeek: Read + Seek {}
 impl<T: Read + Seek> ReadSeek for T {}
 
 pub struct WindowSubscriber {
-    frame_tx: mpsc::Sender<FileWindowFrame>,
-    window_rx: mpsc::Receiver<FileWindow>,
-}
-
-struct WindowSubscription {
-    frame_rx: mpsc::Receiver<FileWindowFrame>,
-    window_tx: mpsc::Sender<FileWindow>,
+    frame: FileWindowFrame,
+    index_rx: watch::Receiver<Vec<FileChunkIndex>>,
+    reader: Arc<Mutex<dyn ReadSeek>>,
 }
 
 impl WindowSubscriber {
-    pub async fn set_frame(&self, frame: FileWindowFrame) {
-        self.frame_tx.send(frame).await.expect("TODO")
+    pub async fn set_frame(&mut self, frame: FileWindowFrame) {
+        // TODO: this should retrigger a read_window probably. Maybe use a watch?
+        self.frame = frame;
     }
 
     pub async fn read_window(&mut self) -> Option<FileWindow> {
-        let mut window = self.window_rx.recv().await?;
+        self.index_rx.changed().await.expect("TODO");
+        let index = self.index_rx.borrow_and_update();
 
-        while let Ok(newer_window) = self.window_rx.try_recv() {
-            window = newer_window;
-        }
+        todo!() // Read the window
 
-        Some(window)
+        // let mut window = self.window_rx.recv().await?;
+
+        // while let Ok(newer_window) = self.window_rx.try_recv() {
+        //     window = newer_window;
+        // }
+
+        // Some(window)
     }
 }
 
@@ -92,7 +94,6 @@ pub struct BigFileEditor {
     state: BigFileEditorState,
     chunks: watch::Receiver<Vec<FileChunkIndex>>,
     reader: Arc<Mutex<dyn ReadSeek>>,
-    subscriptions: Vec<WindowSubscription>,
 }
 
 impl BigFileEditor {
@@ -122,7 +123,6 @@ impl BigFileEditor {
             },
             chunks: index_rx,
             reader,
-            subscriptions: vec![],
         }
     }
 
@@ -159,20 +159,10 @@ impl BigFileEditor {
     }
 
     pub async fn subscribe_window(&mut self, initial_frame: FileWindowFrame) -> WindowSubscriber {
-        let (frame_tx, frame_rx) = mpsc::channel(CHANNEL_SIZE);
-        let (window_tx, window_rx) = mpsc::channel(CHANNEL_SIZE);
-
-        frame_tx.send(initial_frame).await.unwrap();
-
-        let client = WindowSubscription {
-            frame_rx,
-            window_tx,
-        };
-        self.subscriptions.push(client);
-
         WindowSubscriber {
-            frame_tx,
-            window_rx,
+            frame: initial_frame,
+            index_rx: self.chunks.clone(),
+            reader: self.reader.clone(),
         }
     }
 
