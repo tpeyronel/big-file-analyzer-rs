@@ -1,35 +1,37 @@
 use std::{
-    io::{self, Read, Seek, Write},
+    io::{self, Write},
     time::Instant,
 };
 
 use crossterm::{
     cursor,
-    event::{Event, KeyCode, KeyEventKind},
+    event::{Event, EventStream, KeyCode, KeyEventKind},
     queue, style,
     terminal::{self, ClearType},
 };
+use file_analyzer::big_file_editor::{BigFileEditor, FileWindow, FileWindowFrame, TAB_SIZE};
 
-use crate::big_file_editor::{BigFileEditor, FileWindowFrame, TAB_SIZE};
+use std::{io::stdout, time::Duration};
 
-mod big_file_editor;
-mod file;
+use futures::{future::FutureExt, select, StreamExt};
 
-fn main() -> io::Result<()> {
-    crossterm::terminal::enable_raw_mode()?;
+#[tokio::main]
+async fn main() -> io::Result<()> {
+    // crossterm::terminal::enable_raw_mode()?;
 
-    run()?;
+    run().await?;
 
-    crossterm::terminal::disable_raw_mode()?;
+    // crossterm::terminal::disable_raw_mode()?;
     Ok(())
 }
 
-fn run() -> io::Result<()> {
-    let filename = "index.html";
+async fn run() -> io::Result<()> {
+    let filename = "rnd_very_wide.txt";
+    // let filename = "rnd_wide.txt";
+    // let filename = "index.html";
 
     let start = Instant::now();
     let mut editor = BigFileEditor::from_path(filename).unwrap();
-    println!("Read and indexed file in {}ms", start.elapsed().as_millis());
 
     let mut frame = FileWindowFrame {
         first_line: 0,
@@ -38,57 +40,128 @@ fn run() -> io::Result<()> {
         columns: 80,
     };
 
+    let mut subscriber = editor.subscribe_window(frame.clone()).await;
+
     let mut stdout = std::io::stdout();
 
-    read_and_print_window(&mut stdout, &mut editor, &frame)?;
+    let window = subscriber.read_window().await.unwrap();
+    print_window(&mut stdout, &window, &frame)?;
+
+    let mut reader = EventStream::new();
 
     loop {
-        let event = crossterm::event::read()?;
-        match event {
-            Event::Key(e) if e.kind == KeyEventKind::Press => {
-                match e.code {
-                    KeyCode::Esc | KeyCode::Char('q') => break,
-                    KeyCode::Left => {
-                        frame.first_column = frame.first_column.saturating_sub(1);
-                    },
-                    KeyCode::Right => {
-                        frame.first_column = frame.first_column.saturating_add(1);
-                    },
-                    KeyCode::Up => {
-                        frame.first_line = frame.first_line.saturating_sub(1);
-                    },
-                    KeyCode::Down => {
-                        frame.first_line = frame.first_line.saturating_add(1);
-                    },
-                    _ => continue,
-                };
+        let mut event = reader.next().fuse();
 
-                read_and_print_window(&mut stdout, &mut editor, &frame)?;
+        select! {
+            maybe_event = event => {
+                match maybe_event {
+                    Some(Ok(event)) => {
+                        match event {
+                            Event::Key(e) if e.kind == KeyEventKind::Press => {
+                                match e.code {
+                                    KeyCode::Esc | KeyCode::Char('q') => break,
+                                    KeyCode::Left => {
+                                        frame.first_column = frame.first_column.saturating_sub(1);
+                                    },
+                                    KeyCode::Right => {
+                                        frame.first_column = frame.first_column.saturating_add(1);
+                                    },
+                                    KeyCode::Up => {
+                                        frame.first_line = frame.first_line.saturating_sub(1);
+                                    },
+                                    KeyCode::Down => {
+                                        frame.first_line = frame.first_line.saturating_add(1);
+                                    },
+                                    _ => continue,
+                                };
+
+                                subscriber.set_frame(frame.clone()).await;
+                            },
+                            Event::Resize(_width, height) => {
+                                frame.lines = height.saturating_sub(2) as usize;
+
+                                subscriber.set_frame(frame.clone()).await;
+                            },
+                            _ => {},
+                        }
+                    }
+                    Some(Err(e)) => println!("Error: {:?}\r", e),
+                    None => break,
+                }
+            }
+            window = subscriber.read_window().fuse() => {
+                print_window(&mut stdout, &window.as_ref().unwrap(), &frame)?;
             },
-            Event::Resize(_width, height) => {
-                frame.lines = height.saturating_sub(2) as usize;
-                read_and_print_window(&mut stdout, &mut editor, &frame)?;
-            },
-            _ => {},
-        }
+        };
     }
+
+    // let mut window_fut = Box::pin(subscriber.read_window().fuse());
+
+    // loop {
+    //     let mut event = reader.next().fuse();
+
+    //     select! {
+    //         maybe_event = event => {
+    //             match maybe_event {
+    //                 Some(Ok(event)) => {
+    //                     match event {
+    //                         Event::Key(e) if e.kind == KeyEventKind::Press => {
+    //                             match e.code {
+    //                                 KeyCode::Esc | KeyCode::Char('q') => break,
+    //                                 KeyCode::Left => {
+    //                                     frame.first_column = frame.first_column.saturating_sub(1);
+    //                                 },
+    //                                 KeyCode::Right => {
+    //                                     frame.first_column = frame.first_column.saturating_add(1);
+    //                                 },
+    //                                 KeyCode::Up => {
+    //                                     frame.first_line = frame.first_line.saturating_sub(1);
+    //                                 },
+    //                                 KeyCode::Down => {
+    //                                     frame.first_line = frame.first_line.saturating_add(1);
+    //                                 },
+    //                                 _ => continue,
+    //                             };
+
+    //                             subscriber.set_frame(frame.clone()).await;
+    //                         },
+    //                         Event::Resize(_width, height) => {
+    //                             frame.lines = height.saturating_sub(2) as usize;
+
+    //                             subscriber.set_frame(frame.clone()).await;
+    //                         },
+    //                         _ => {},
+    //                     }
+    //                 }
+    //                 Some(Err(e)) => println!("Error: {:?}\r", e),
+    //                 None => break,
+    //             }
+    //         }
+    //         window = window_fut => {
+    //             print_window(&mut stdout, &window.as_ref().unwrap(), &frame)?;
+
+    //             drop(window_fut);
+    //             window_fut = Box::pin(subscriber.read_window().fuse());
+    //         },
+    //     };
+    // }
+
     Ok(())
 }
 
-fn read_and_print_window(
+fn print_window(
     stdout: &mut io::Stdout,
-    editor: &mut BigFileEditor,
+    window: &FileWindow,
     frame: &FileWindowFrame,
 ) -> io::Result<()> {
-    queue!(
-        stdout,
-        style::ResetColor,
-        terminal::Clear(ClearType::All),
-        cursor::Hide,
-        cursor::MoveTo(1, 1)
-    )?;
+    // queue!(
+    //     stdout,
+    //     style::ResetColor,
+    //     terminal::Clear(ClearType::All),
+    //     cursor::Hide,
+    //     cursor::MoveTo(1, 1)
+    // )?;
 
-    let window = editor.read_window(&frame);
     let offset = frame.first_column - window.frame.first_column;
 
     let mut output = String::new();
