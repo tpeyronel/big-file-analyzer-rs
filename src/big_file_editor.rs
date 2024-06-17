@@ -5,10 +5,11 @@ use std::{
     ops::{Deref, DerefMut},
     path::Path,
     sync::{Arc, Mutex},
-    thread::{self},
+    thread,
     time::{Duration, Instant},
 };
 
+use futures::{select, FutureExt};
 use tokio::sync::{oneshot, watch};
 
 use crate::file::ReadRetry;
@@ -22,8 +23,6 @@ const ASCII_CR: u8 = 13;
 const INDEXING_BUFFER_SIZE: usize = 1024 * 1024;
 
 const CHUNK_SIZE: usize = 4096;
-
-const CHANNEL_SIZE: usize = 32;
 
 const UPDATE_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -74,35 +73,44 @@ pub trait ReadSeek: Read + Seek {}
 impl<T: Read + Seek> ReadSeek for T {}
 
 pub struct WindowSubscriber {
-    frame: FileWindowFrame,
+    frame_tx: watch::Sender<FileWindowFrame>,
+    frame_rx: watch::Receiver<FileWindowFrame>,
     index_rx: watch::Receiver<FileIndex>,
+    indexing_done: bool,
     reader: Arc<Mutex<dyn ReadSeek>>,
 }
 
 impl WindowSubscriber {
     pub async fn set_frame(&mut self, frame: FileWindowFrame) {
-        // TODO: this should retrigger a read_window probably. Maybe use a watch?
-        self.frame = frame;
+        self.frame_tx.send(frame).expect("TODO");
     }
 
     pub async fn read_window(&mut self) -> Option<FileWindow> {
-        self.index_rx.changed().await.expect("TODO");
-        let index = self.index_rx.borrow_and_update();
+        select! {
+            res = async {
+                if !self.indexing_done {
+                    self.index_rx.changed().await
+                } else {
+                    futures::future::pending().await
+                }
+            }.fuse() => {
+                if res.is_err() {
+                    self.indexing_done = true;
+                }
 
-        todo!() // Read the window
+                let index = self.index_rx.borrow();
 
-        // let mut window = self.window_rx.recv().await?;
+                return Some(index.read_window(&self.frame_rx.borrow()));
+            },
+            res = self.frame_rx.changed().fuse() => {
+                res.expect("TODO");
 
-        // while let Ok(newer_window) = self.window_rx.try_recv() {
-        //     window = newer_window;
-        // }
+                let index = self.index_rx.borrow();
 
-        // Some(window)
+                return Some(index.read_window(&self.frame_rx.borrow()));
+            },
+        }
     }
-}
-
-struct IndexUpdate {
-    new_chunks: Vec<FileChunkIndex>,
 }
 
 enum BigFileEditorState {
@@ -165,9 +173,13 @@ impl BigFileEditor {
     }
 
     pub async fn subscribe_window(&mut self, initial_frame: FileWindowFrame) -> WindowSubscriber {
+        let (frame_tx, frame_rx) = watch::channel(initial_frame);
+
         WindowSubscriber {
-            frame: initial_frame,
+            frame_tx,
+            frame_rx,
             index_rx: self.index_rx.clone(),
+            indexing_done: false,
             reader: self.reader.clone(),
         }
     }

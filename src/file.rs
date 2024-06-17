@@ -15,7 +15,7 @@ impl<T: Read> ReadRetry for T {
                     }
 
                     bytes_read += bytes;
-                }
+                },
                 Err(err) => match err.kind() {
                     io::ErrorKind::Interrupted => continue,
                     _ => return Err(err),
