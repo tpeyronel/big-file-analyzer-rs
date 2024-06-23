@@ -72,19 +72,17 @@ impl WalkState {
 pub trait ReadSeek: Read + Seek {}
 impl<T: Read + Seek> ReadSeek for T {}
 
-pub struct WindowSubscriber {
-    frame_tx: watch::Sender<FileWindowFrame>,
+pub struct WindowObserver {
     frame_rx: watch::Receiver<FileWindowFrame>,
     index_rx: watch::Receiver<FileIndex>,
     indexing_done: bool,
-    reader: Arc<Mutex<dyn ReadSeek + Send>>,
 }
 
-impl WindowSubscriber {
-    pub async fn set_frame(&mut self, frame: FileWindowFrame) {
-        self.frame_tx.send(frame).expect("TODO");
-    }
+pub struct WindowObserverConfigurator {
+    frame_tx: watch::Sender<FileWindowFrame>,
+}
 
+impl WindowObserver {
     pub async fn read_window(&mut self) -> Option<FileWindow> {
         select! {
             res = async {
@@ -110,6 +108,12 @@ impl WindowSubscriber {
                 return Some(index.read_window(&self.frame_rx.borrow()));
             },
         }
+    }
+}
+
+impl WindowObserverConfigurator {
+    pub fn set_frame(&self, frame: FileWindowFrame) {
+        self.frame_tx.send(frame).expect("TODO");
     }
 }
 
@@ -172,16 +176,21 @@ impl BigFileEditor {
         self.index_rx.borrow().read_window(frame)
     }
 
-    pub fn subscribe_window(&mut self, initial_frame: FileWindowFrame) -> WindowSubscriber {
+    pub fn subscribe_window(
+        &mut self,
+        initial_frame: FileWindowFrame,
+    ) -> (WindowObserverConfigurator, WindowObserver) {
         let (frame_tx, frame_rx) = watch::channel(initial_frame);
 
-        WindowSubscriber {
-            frame_tx,
+        let window_observer_configurator = WindowObserverConfigurator { frame_tx };
+
+        let window_observer = WindowObserver {
             frame_rx,
             index_rx: self.index_rx.clone(),
             indexing_done: false,
-            reader: self.reader.clone(),
-        }
+        };
+
+        (window_observer_configurator, window_observer)
     }
 
     fn run_indexing_thread(

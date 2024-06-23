@@ -40,11 +40,11 @@ async fn run() -> io::Result<()> {
         columns: 80,
     };
 
-    let mut subscriber = editor.subscribe_window(frame.clone()).await;
+    let (observer_configurator, mut observer) = editor.subscribe_window(frame.clone());
 
     let mut stdout = std::io::stdout();
 
-    let window = subscriber.read_window().await.unwrap();
+    let window = observer.read_window().await.unwrap();
     print_window(&mut stdout, &window, &frame)?;
 
     let mut reader = EventStream::new();
@@ -75,12 +75,12 @@ async fn run() -> io::Result<()> {
                                     _ => continue,
                                 };
 
-                                subscriber.set_frame(frame.clone()).await;
+                                observer_configurator.set_frame(frame.clone());
                             },
                             Event::Resize(_width, height) => {
                                 frame.lines = height.saturating_sub(2) as usize;
 
-                                subscriber.set_frame(frame.clone()).await;
+                                observer_configurator.set_frame(frame.clone());
                             },
                             _ => {},
                         }
@@ -89,7 +89,7 @@ async fn run() -> io::Result<()> {
                     None => break,
                 }
             }
-            window = subscriber.read_window().fuse() => {
+            window = observer.read_window().fuse() => {
                 print_window(&mut stdout, &window.as_ref().unwrap(), &frame)?;
             },
         };
