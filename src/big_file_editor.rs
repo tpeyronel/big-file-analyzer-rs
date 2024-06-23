@@ -77,7 +77,7 @@ pub struct WindowSubscriber {
     frame_rx: watch::Receiver<FileWindowFrame>,
     index_rx: watch::Receiver<FileIndex>,
     indexing_done: bool,
-    reader: Arc<Mutex<dyn ReadSeek>>,
+    reader: Arc<Mutex<dyn ReadSeek + Send>>,
 }
 
 impl WindowSubscriber {
@@ -123,7 +123,7 @@ enum BigFileEditorState {
 pub struct BigFileEditor {
     state: BigFileEditorState,
     index_rx: watch::Receiver<FileIndex>,
-    reader: Arc<Mutex<dyn ReadSeek>>,
+    reader: Arc<Mutex<dyn ReadSeek + Send>>,
 }
 
 impl BigFileEditor {
@@ -172,7 +172,7 @@ impl BigFileEditor {
         self.index_rx.borrow().read_window(frame)
     }
 
-    pub async fn subscribe_window(&mut self, initial_frame: FileWindowFrame) -> WindowSubscriber {
+    pub fn subscribe_window(&mut self, initial_frame: FileWindowFrame) -> WindowSubscriber {
         let (frame_tx, frame_rx) = watch::channel(initial_frame);
 
         WindowSubscriber {
